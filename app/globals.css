@@ -2,33 +2,75 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap");
+:root {
+  --bg: #100e0b;
+  --panel: #1c1913;
+  --panel-2: #241f17;
+  --hairline: #35301f;
+  --amber: #f2a93b;
+  --amber-dim: #8a662b;
+  --bull: #3fbf7f;
+  --bear: #e24e4e;
+  --ink: #ece6d6;
+  --ink-dim: #8c8677;
+}
 
+* {
+  box-sizing: border-box;
+}
+
+html,
 body {
-  background-color: #0a0908;
-  color: #e8e2d5;
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
-::selection {
-  background: #ffb347;
-  color: #0a0908;
+.font-mono-board {
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
 }
 
-.scanlines {
-  background-image: repeating-linear-gradient(
-    to bottom,
-    rgba(255, 179, 71, 0.015),
-    rgba(255, 179, 71, 0.015) 1px,
-    transparent 1px,
-    transparent 2px
-  );
+.board-bg {
+  background-image:
+    radial-gradient(circle at 15% 0%, rgba(242, 169, 59, 0.06), transparent 45%),
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.012) 0px, rgba(255, 255, 255, 0.012) 1px, transparent 1px, transparent 3px);
 }
 
-@keyframes blink {
-  0%, 49% { opacity: 1; }
-  50%, 100% { opacity: 0; }
+@keyframes flip-in {
+  0% {
+    transform: rotateX(-90deg);
+    opacity: 0.3;
+  }
+  60% {
+    transform: rotateX(8deg);
+  }
+  100% {
+    transform: rotateX(0deg);
+    opacity: 1;
+  }
 }
-.cursor-blink {
-  animation: blink 1s step-end infinite;
+
+.flip-in {
+  animation: flip-in 420ms ease-out;
+  transform-origin: top center;
+}
+
+@keyframes pulse-dot {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.live-dot {
+  animation: pulse-dot 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flip-in,
+  .live-dot {
+    animation: none !important;
+  }
 }

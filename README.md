@@ -1,112 +1,77 @@
 # Signal Desk
 
-Credibility-weighted stock signal aggregator with a paper trading bot.
-Combines manually-logged Discord alerts, Reddit sentiment (bot-filtered),
-and Yahoo Finance data into a single scored feed, and simulates trades
-when a signal clears a confidence threshold.
+Public, non-interactive live scoreboard: ranks the top 9 trade candidates right
+now by scanning Reddit, Yahoo Finance, and any Discord alerts you log — no
+account, no login, no manual running required once it's deployed.
 
-## What's actually built
+## How it works
 
-- **Discord intake** — manual entry form (instant log). No bot automation
-  since you're a server member, not an admin — see the note on that below.
-- **Reddit ingestion** — via Reddit's official API (OAuth), extracts ticker
-  mentions from post titles, scores each poster's bot/spam likelihood using
-  account age, karma, and posting patterns.
-- **Yahoo Finance scan** — volume spike detection + analyst rating lean,
-  via the unofficial `yahoo-finance2` package.
-- **Credibility engine** (`lib/credibility.ts`) — per-source scoring:
-  - Discord: weighted by that server's actual resolved-trade hit rate
-  - Reddit: trust factor (1 - bot likelihood) + engagement + recency
-  - Yahoo: volume ratio + analyst lean
-  - Corroboration boost when multiple sources flag the same ticker
-- **Paper trading bot** (`lib/paperTrade.ts`) — $10,000 starting balance,
-  position size scaled by confidence tier, full reasoning logged per trade
-  for transparency.
+- **`GET /api/scores`** does the actual work on every call:
+  1. Pulls hot posts from r/wallstreetbets, r/stocks, r/options, r/StockMarket
+     via Reddit's public JSON endpoints (`reddit.com/r/<sub>/hot.json`) — **no
+     Reddit developer app / OAuth needed**, just a descriptive User-Agent.
+  2. Extracts `$TICKER` cashtags (high confidence) and bare all-caps words
+     (lower confidence, stopword-filtered) from post titles/bodies, weighted
+     by upvotes + comments.
+  3. Pulls live price, % change, and volume from Yahoo Finance
+     (`yahoo-finance2`, also free, no key) for every candidate, plus a
+     best-effort read of the nearest options chain for IV / put-call skew.
+  4. Folds in any Discord alerts you've logged (see below).
+  5. Scores each candidate on two 0–100 axes — **Confidence** (how much the
+     signals agree the bot would take this trade) and **Benefit** (how
+     favorable the setup looks if taken) — and returns the top 9 by a
+     blended overall score. A ticker is marked **Taken** once Confidence
+     crosses 72, mirroring your paper-trading bot's threshold.
+- The page (`app/page.js`) polls that route every 5 minutes and re-renders.
+  Nothing on the page is clickable except the "Log a Discord Alert" panel —
+  everything else is read-only display.
 
-## Setup
+**Important nuance on "standalone":** the scoring only runs when
+`/api/scores` is hit. With just client polling, that means it only
+recomputes while someone has the page open. That's normal and fine for a
+public dashboard. If you want it to keep updating even with zero visitors
+(e.g. for logging "Taken" trades to a persistent list later), you'd add a
+scheduled job — Vercel's free Hobby plan caps its built-in Cron to once a
+day, so once-a-day is fine for free; for anything more frequent you'd
+either upgrade to Vercel Pro or use a free external pinger (e.g.
+cron-job.org) hitting your `/api/scores` URL every few minutes.
+
+## The one input: logging a Discord alert
+
+Open "Log a Discord Alert" on the page and paste the alert text as-is, e.g.:
+
+```
+BUY QQQ 450C 8/15 @ 2.10 — momentum off open
+```
+
+It extracts the ticker and bullish/bearish direction automatically and folds
+it into that ticker's score (with a confidence + benefit boost) on the next
+refresh. No structured form fields required.
+
+## Deploying
+
+1. Push this folder to a new GitHub repo.
+2. Import it into Vercel (vercel.com → New Project → your repo). No env
+   vars are required for the site to work.
+3. **(Recommended)** For Discord alerts to persist across requests instead
+   of resetting on cold starts: in your Vercel project → Storage → Create
+   → KV. Once created, Vercel auto-populates `KV_REST_API_URL` and
+   `KV_REST_API_TOKEN` for you — no manual copying needed, just redeploy.
+
+## Local development
 
 ```bash
 npm install
-cp .env.example .env.local   # fill in Reddit credentials (optional, see below)
 npm run dev
 ```
 
-Open http://localhost:3000.
+Open http://localhost:3000. Reddit/Yahoo calls happen from your own machine
+in dev, so you'll see live data locally too.
 
-## Reddit API credentials
+## Tuning
 
-Reddit ingestion needs an app registered at https://www.reddit.com/prefs/apps
-(choose "script" type). Add to `.env.local`:
-
-```
-REDDIT_CLIENT_ID=xxx
-REDDIT_CLIENT_SECRET=xxx
-REDDIT_USERNAME=your_reddit_username
-REDDIT_PASSWORD=your_reddit_password
-```
-
-Without these, the "scan r/wallstreetbets" button will just show an error —
-everything else still works.
-
-## Important limitations to know about
-
-**Storage** is Upstash Redis (`lib/store.ts`) when `UPSTASH_REDIS_REST_URL`
-and `UPSTASH_REDIS_REST_TOKEN` are set — REST-based, so it works fine from
-serverless functions (Vercel included). Without those env vars it falls
-back to flat-file JSON in `data/*.json`, which is fine for local dev but
-**will not work** on Vercel or other serverless platforms, since their
-filesystem is read-only/ephemeral per invocation. Get free Upstash Redis
-credentials at https://console.upstash.com (or attach the Upstash
-integration from the Vercel Marketplace) and set the two env vars before
-deploying.
-
-**Discord is manual, not automated.** Since you're a member (not admin) of
-the paid servers, there's no legitimate way to auto-ingest messages without
-either (a) the server owner adding a read-only bot, or (b) automating your
-own user account, which violates Discord's ToS and risks your account/access.
-The form is fast (a few fields, one submit) but it's you typing, not a bot
-listening. If you can get the server owner to add a bot with read access to
-the alert channel, that's the real automation path — happy to build that
-Gateway listener if/when that becomes possible.
-
-**No Instagram/TikTok scraping**, by design — both explicitly prohibit it
-in their ToS. If you want that data, licensed providers (Bright Data, Apify)
-sell it as an API rather than requiring scraping.
-
-**Yahoo Finance is unofficial.** `yahoo-finance2` scrapes/uses undocumented
-endpoints that Yahoo could change or restrict at any time. Fine for a demo,
-but don't build anything mission-critical on it long-term — a paid provider
-(Alpha Vantage, Financial Modeling Prep, Polygon.io) is the durable choice
-if this grows.
-
-**Credibility scoring is a starting point, not gospel.** The weights in
-`lib/credibility.ts` (e.g. `baseTrust = 0.75` for Discord, the 0.6/0.25/0.15
-split for Reddit) are reasonable defaults, not tuned on real data yet.
-As trades resolve and you get a real track record per source, revisit these.
-
-## Project structure
-
-```
-app/
-  page.tsx                 dashboard
-  api/discord-alerts/      manual alert intake + instant trade execution
-  api/reddit/              reddit scan endpoint
-  api/yahoo/                yahoo finance scan endpoint
-  api/portfolio/           bot state, closing trades
-lib/
-  types.ts                 shared types
-  store.ts                 flat-file storage (swap for real DB later)
-  credibility.ts           the scoring engine
-  redditBotFilter.ts        bot/spam heuristics
-  paperTrade.ts             trade execution logic
-  yahoo.ts                  yahoo finance helpers
-components/                 dashboard UI pieces
-```
-
-## Natural next steps
-
-1. Add an options-chain data source (Tradier sandbox is free) for real
-   premium/IV data instead of using stock price as a stand-in for options P&L
-2. Tune credibility weights once you have real resolved trades to backtest against
-3. Add a public-facing read-only view of the trade ledger (strip the intake
-   form) if you want this to double as a credibility showcase for others
+- **Watchlist / subreddits scanned:** `lib/reddit.js` → `SUBREDDITS`
+- **Scoring weights:** `lib/scoring.js` — confidence and benefit are each
+  built from a weighted sum of signals; adjust the multipliers there.
+- **Take threshold:** `TAKE_THRESHOLD` in `lib/scoring.js` (currently 72).
+- **Refresh interval:** `REFRESH_MS` in `app/page.js` (currently 5 min).
