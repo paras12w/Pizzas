@@ -7,6 +7,7 @@ import BoardRow from "./components/BoardRow";
 import AlertPanel from "./components/AlertPanel";
 import BotPanel from "./components/BotPanel";
 import TickerDetail from "./components/TickerDetail";
+import NotificationBell from "./components/NotificationBell";
 
 // Polls fast (was 5min, then 1min) per request — kept the candidate pool
 // modest in app/api/scores/route.js to stay under Yahoo's informal rate
@@ -48,8 +49,41 @@ function useActiveViewers() {
   return count;
 }
 
+function BoardList({ title, pillLabel, pillColor, entries, status, onSelect }) {
+  return (
+    <div>
+      <div className="rounded-md border border-[var(--hairline)] bg-[var(--panel)] overflow-hidden">
+        <div className="flex items-center gap-2 border-b border-[var(--hairline)] bg-[var(--panel-2)] px-3 py-2">
+          <span
+            className="rounded-sm px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-black"
+            style={{ background: pillColor }}
+          >
+            {pillLabel}
+          </span>
+          <span className="text-[10px] uppercase tracking-widest text-[var(--ink-dim)]">{title}</span>
+        </div>
+
+        {status === "loading" && (
+          <div className="px-4 py-10 text-center text-xs text-[var(--ink-dim)] font-mono-board">Scanning…</div>
+        )}
+
+        {status === "ok" && entries.length === 0 && (
+          <div className="px-4 py-10 text-center text-xs text-[var(--ink-dim)] font-mono-board">
+            No {pillLabel.toLowerCase()} candidates this cycle.
+          </div>
+        )}
+
+        {entries.map((entry) => (
+          <BoardRow key={entry.ticker} entry={entry} onSelect={onSelect} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Page() {
-  const [board, setBoard] = useState([]);
+  const [boardBuy, setBoardBuy] = useState([]);
+  const [boardSell, setBoardSell] = useState([]);
   const [botA, setBotA] = useState(null);
   const [updatedAt, setUpdatedAt] = useState(null);
   const [persistent, setPersistent] = useState(true);
@@ -75,7 +109,8 @@ export default function Page() {
       const res = await fetch("/api/scores", { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to load board");
-      setBoard(data.board || []);
+      setBoardBuy(data.boardBuy || []);
+      setBoardSell(data.boardSell || []);
       setBotA(data.botA || null);
       setUpdatedAt(data.updatedAt);
       setPersistent(data.persistent);
@@ -122,6 +157,7 @@ export default function Page() {
     }
   }
 
+  const board = [...boardBuy, ...boardSell];
   const selectedEntry = board.find((b) => b.ticker === selectedTicker) || null;
   const selectedBotPosition = selectedTicker
     ? (botA?.open || []).map((p) => ({ ...p, status: "open" })).find((p) => p.ticker === selectedTicker) ||
@@ -134,22 +170,25 @@ export default function Page() {
       <header className="mb-8 flex flex-wrap items-end justify-between gap-3 border-b border-[var(--hairline)] pb-4">
         <div>
           <h1 className="font-mono-board text-2xl sm:text-3xl font-black tracking-tight text-[var(--amber)]">
-            SIGNAL&nbsp;DESK
+            PIZZAS&nbsp;SHECKLES
           </h1>
           <p className="mt-1 text-xs sm:text-sm text-[var(--ink-dim)]">
-            Live-ranked trade candidates · Reddit + Yahoo Finance + Discord alerts
+            Pizza money, ranked live · Reddit + Yahoo Finance + analyst ratings + Discord alerts
           </p>
         </div>
-        <div className="text-right font-mono-board text-[11px] text-[var(--ink-dim)]">
-          <div className="flex items-center justify-end gap-1.5">
-            <span className="live-dot h-1.5 w-1.5 rounded-full bg-[var(--ink-dim)]" />
-            {viewers} watching
+        <div className="flex items-start gap-3">
+          <div className="text-right font-mono-board text-[11px] text-[var(--ink-dim)]">
+            <div className="flex items-center justify-end gap-1.5">
+              <span className="live-dot h-1.5 w-1.5 rounded-full bg-[var(--ink-dim)]" />
+              {viewers} watching
+            </div>
+            <div className="mt-1 flex items-center justify-end gap-1.5">
+              <span className={`h-1.5 w-1.5 rounded-full ${status === "ok" ? "live-dot bg-[var(--bull)]" : status === "error" ? "bg-[var(--bear)]" : "bg-[var(--ink-dim)]"}`} />
+              {status === "ok" ? (refreshing ? "REFRESHING" : "LIVE") : status === "error" ? "ERROR" : "LOADING"}
+            </div>
+            <div>{updatedAt ? timeAgo(updatedAt) : ""}</div>
           </div>
-          <div className="mt-1 flex items-center justify-end gap-1.5">
-            <span className={`h-1.5 w-1.5 rounded-full ${status === "ok" ? "live-dot bg-[var(--bull)]" : status === "error" ? "bg-[var(--bear)]" : "bg-[var(--ink-dim)]"}`} />
-            {status === "ok" ? (refreshing ? "REFRESHING" : "LIVE") : status === "error" ? "ERROR" : "LOADING"}
-          </div>
-          <div>{updatedAt ? timeAgo(updatedAt) : ""}</div>
+          <NotificationBell />
         </div>
       </header>
 
@@ -161,43 +200,36 @@ export default function Page() {
 
       {!persistent && status === "ok" && (
         <div className="mb-6 rounded-sm border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-4 py-3 text-xs text-[var(--ink-dim)]">
-          Discord alert storage isn&apos;t persistent yet — set up Vercel KV (see README) so alerts and bot positions survive server restarts.
+          Storage isn&apos;t persistent yet — set up Vercel KV (see README) so alerts, bot positions, and weights
+          survive server restarts.
         </div>
       )}
 
       <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
         <section>
-          <div className="rounded-md border border-[var(--hairline)] bg-[var(--panel)] overflow-hidden">
-            <div className="grid grid-cols-[3rem_5.5rem_1fr_1fr_5.5rem_4rem] gap-3 sm:gap-4 border-b border-[var(--hairline)] bg-[var(--panel-2)] px-3 sm:px-4 py-2 text-[10px] uppercase tracking-widest text-[var(--ink-dim)]">
-              <div>Rank</div>
-              <div>Ticker</div>
-              <div>Confidence</div>
-              <div>Benefit</div>
-              <div>Status</div>
-              <div>Src</div>
-            </div>
-
-            {status === "loading" && (
-              <div className="px-4 py-10 text-center text-sm text-[var(--ink-dim)] font-mono-board">
-                Scanning Reddit + Yahoo Finance…
-              </div>
-            )}
-
-            {status === "ok" && board.length === 0 && (
-              <div className="px-4 py-10 text-center text-sm text-[var(--ink-dim)] font-mono-board">
-                No candidates found this cycle. Board refreshes automatically.
-              </div>
-            )}
-
-            {board.map((entry) => (
-              <BoardRow key={entry.ticker} entry={entry} onSelect={setSelectedTicker} />
-            ))}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <BoardList
+              title="Top 9 candidates"
+              pillLabel="Buy"
+              pillColor="var(--bull)"
+              entries={boardBuy}
+              status={status}
+              onSelect={setSelectedTicker}
+            />
+            <BoardList
+              title="Top 9 candidates"
+              pillLabel="Sell"
+              pillColor="var(--bear)"
+              entries={boardSell}
+              status={status}
+              onSelect={setSelectedTicker}
+            />
           </div>
 
           <p className="mt-3 text-[11px] text-[var(--ink-dim)] font-mono-board">
-            Board always shows the current top 9 candidates, ranked best-to-worst — even on a slow day. Bot A opens a
-            paper position once confidence crosses {TAKE_THRESHOLD}. Click a ticker for its chart and score
-            breakdown. Refreshes every {REFRESH_MS / 1000}s.
+            Each list always shows the current top 9 by direction, ranked best-to-worst — even on a slow day. Bot A
+            opens a paper position once confidence crosses {TAKE_THRESHOLD}; any logged Discord alert always clears
+            it. Click a ticker for its chart and score breakdown. Refreshes every {REFRESH_MS / 1000}s.
           </p>
         </section>
 
