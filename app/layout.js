@@ -1,4 +1,5 @@
 import "./globals.css";
+import Nav from "./components/Nav";
 
 export const metadata = {
   title: "SIGNAL DESK — Live Trade Board",
@@ -8,7 +9,10 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body className="board-bg min-h-screen">{children}</body>
+      <body className="board-bg min-h-screen">
+        <Nav />
+        {children}
+      </body>
     </html>
   );
 }
