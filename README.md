@@ -50,12 +50,15 @@ everything else still works.
 
 ## Important limitations to know about
 
-**Storage is flat-file JSON** (`data/*.json`), not a real database. Fine for
-running locally or on a single always-on server. It will **not** work
-correctly on Vercel or other serverless platforms, since their filesystem
-is read-only/ephemeral per invocation. Before deploying there, swap
-`lib/store.ts` for Supabase or Postgres — the function signatures are
-already shaped to make that a fairly mechanical swap.
+**Storage** is Upstash Redis (`lib/store.ts`) when `UPSTASH_REDIS_REST_URL`
+and `UPSTASH_REDIS_REST_TOKEN` are set — REST-based, so it works fine from
+serverless functions (Vercel included). Without those env vars it falls
+back to flat-file JSON in `data/*.json`, which is fine for local dev but
+**will not work** on Vercel or other serverless platforms, since their
+filesystem is read-only/ephemeral per invocation. Get free Upstash Redis
+credentials at https://console.upstash.com (or attach the Upstash
+integration from the Vercel Marketplace) and set the two env vars before
+deploying.
 
 **Discord is manual, not automated.** Since you're a member (not admin) of
 the paid servers, there's no legitimate way to auto-ingest messages without
@@ -102,9 +105,7 @@ components/                 dashboard UI pieces
 
 ## Natural next steps
 
-1. Swap flat-file storage for Supabase (schema maps almost 1:1 to the types
-   in `lib/types.ts`)
-2. Add an options-chain data source (Tradier sandbox is free) for real
+1. Add an options-chain data source (Tradier sandbox is free) for real
    premium/IV data instead of using stock price as a stand-in for options P&L
 2. Tune credibility weights once you have real resolved trades to backtest against
 3. Add a public-facing read-only view of the trade ledger (strip the intake

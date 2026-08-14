@@ -1,13 +1,22 @@
 import fs from "fs";
 import path from "path";
+import { Redis } from "@upstash/redis";
 import { Alert, DiscordServerConfig, Portfolio, Trade } from "./types";
 
-// NOTE: This is a flat-file JSON store meant to get you running locally fast.
-// It works fine for a single-user demo but will NOT survive serverless
-// deployments (e.g. Vercel) cleanly since the filesystem there is ephemeral
-// and not shared across instances. Before deploying for real, swap the
-// read/write calls below for a real database (Supabase/Postgres is the
-// natural fit and keeps almost the same function signatures).
+// Serverless-safe storage: reads/writes JSON blobs to Upstash Redis (REST-based,
+// so it works fine from serverless/edge functions) when credentials are set.
+// Falls back to flat-file JSON in ./data when they're not, so `npm run dev`
+// still works with zero setup locally. Set UPSTASH_REDIS_REST_URL and
+// UPSTASH_REDIS_REST_TOKEN (see .env.example) before deploying to Vercel or
+// any other platform with a read-only/ephemeral filesystem.
+
+const redis =
+  process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+    ? new Redis({
+        url: process.env.UPSTASH_REDIS_REST_URL,
+        token: process.env.UPSTASH_REDIS_REST_TOKEN,
+      })
+    : null;
 
 const DATA_DIR = path.join(process.cwd(), "data");
 
@@ -18,7 +27,7 @@ function ensureFile(file: string, fallback: unknown) {
   return full;
 }
 
-function readJSON<T>(file: string, fallback: T): T {
+function readFileJSON<T>(file: string, fallback: T): T {
   const full = ensureFile(file, fallback);
   try {
     return JSON.parse(fs.readFileSync(full, "utf-8"));
@@ -27,49 +36,65 @@ function readJSON<T>(file: string, fallback: T): T {
   }
 }
 
-function writeJSON<T>(file: string, data: T) {
+function writeFileJSON<T>(file: string, data: T) {
   const full = ensureFile(file, data);
   fs.writeFileSync(full, JSON.stringify(data, null, 2));
 }
 
+async function readKey<T>(key: string, fallback: T): Promise<T> {
+  if (redis) {
+    const value = await redis.get<T>(key);
+    return value ?? fallback;
+  }
+  return readFileJSON<T>(`${key}.json`, fallback);
+}
+
+async function writeKey<T>(key: string, data: T): Promise<void> {
+  if (redis) {
+    await redis.set(key, data);
+    return;
+  }
+  writeFileJSON(`${key}.json`, data);
+}
+
 // --- Discord server configs (your two paid servers, tracked for hit rate) ---
 
-const SERVERS_FILE = "discord-servers.json";
+const SERVERS_KEY = "discord-servers";
 
 const DEFAULT_SERVERS: DiscordServerConfig[] = [
   { id: "server-a", name: "Discord Server A", hitRate: 0.6, totalCalls: 0, wins: 0 },
   { id: "server-b", name: "Discord Server B", hitRate: 0.6, totalCalls: 0, wins: 0 },
 ];
 
-export function getServers(): DiscordServerConfig[] {
-  return readJSON(SERVERS_FILE, DEFAULT_SERVERS);
+export async function getServers(): Promise<DiscordServerConfig[]> {
+  return readKey(SERVERS_KEY, DEFAULT_SERVERS);
 }
 
-export function updateServer(id: string, patch: Partial<DiscordServerConfig>) {
-  const servers = getServers();
+export async function updateServer(id: string, patch: Partial<DiscordServerConfig>) {
+  const servers = await getServers();
   const idx = servers.findIndex((s) => s.id === id);
   if (idx === -1) return;
   servers[idx] = { ...servers[idx], ...patch };
-  writeJSON(SERVERS_FILE, servers);
+  await writeKey(SERVERS_KEY, servers);
 }
 
 // --- Alerts (every signal that came in, from any source) ---
 
-const ALERTS_FILE = "alerts.json";
+const ALERTS_KEY = "alerts";
 
-export function getAlerts(): Alert[] {
-  return readJSON<Alert[]>(ALERTS_FILE, []);
+export async function getAlerts(): Promise<Alert[]> {
+  return readKey<Alert[]>(ALERTS_KEY, []);
 }
 
-export function addAlert(alert: Alert) {
-  const alerts = getAlerts();
+export async function addAlert(alert: Alert) {
+  const alerts = await getAlerts();
   alerts.unshift(alert);
-  writeJSON(ALERTS_FILE, alerts);
+  await writeKey(ALERTS_KEY, alerts);
 }
 
 // --- Portfolio (the paper trading bot's state) ---
 
-const PORTFOLIO_FILE = "portfolio.json";
+const PORTFOLIO_KEY = "portfolio";
 
 const DEFAULT_PORTFOLIO: Portfolio = {
   startingBalance: 10000,
@@ -77,23 +102,23 @@ const DEFAULT_PORTFOLIO: Portfolio = {
   trades: [],
 };
 
-export function getPortfolio(): Portfolio {
-  return readJSON(PORTFOLIO_FILE, DEFAULT_PORTFOLIO);
+export async function getPortfolio(): Promise<Portfolio> {
+  return readKey(PORTFOLIO_KEY, DEFAULT_PORTFOLIO);
 }
 
-export function savePortfolio(p: Portfolio) {
-  writeJSON(PORTFOLIO_FILE, p);
+export async function savePortfolio(p: Portfolio) {
+  await writeKey(PORTFOLIO_KEY, p);
 }
 
-export function addTrade(trade: Trade) {
-  const p = getPortfolio();
+export async function addTrade(trade: Trade) {
+  const p = await getPortfolio();
   p.trades.unshift(trade);
   p.cashBalance -= trade.positionSize;
-  savePortfolio(p);
+  await savePortfolio(p);
 }
 
-export function closeTrade(tradeId: string, exitPrice: number) {
-  const p = getPortfolio();
+export async function closeTrade(tradeId: string, exitPrice: number) {
+  const p = await getPortfolio();
   const t = p.trades.find((tr) => tr.id === tradeId);
   if (!t || t.status === "closed") return;
 
@@ -112,17 +137,17 @@ export function closeTrade(tradeId: string, exitPrice: number) {
   }
 
   p.cashBalance += t.positionSize + t.pnl;
-  savePortfolio(p);
+  await savePortfolio(p);
 
   // Feed the outcome back into the source server's hit rate
   if (t.sourceLabel.startsWith("server-")) {
-    const servers = getServers();
+    const servers = await getServers();
     const server = servers.find((s) => s.id === t.sourceLabel);
     if (server) {
       const won = (t.pnl ?? 0) > 0;
       const totalCalls = server.totalCalls + 1;
       const wins = server.wins + (won ? 1 : 0);
-      updateServer(server.id, {
+      await updateServer(server.id, {
         totalCalls,
         wins,
         hitRate: wins / totalCalls,
