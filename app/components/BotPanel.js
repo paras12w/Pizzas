@@ -41,6 +41,9 @@ export default function BotPanel({ title = "Paper-Trading Bot", book }) {
               <div key={p.ticker} className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono-board text-xs">
                 <TickerDecal ticker={p.ticker} size={18} />
                 <span className="font-bold" style={{ color: "var(--amber)" }}>{p.ticker}</span>
+                {p.instrument === "option" && (
+                  <span className="rounded-sm border border-[var(--hairline)] px-1 text-[9px] text-[var(--ink-dim)]">OPT</span>
+                )}
                 <span className="text-[var(--ink-dim)]">{p.direction}</span>
                 <span className="text-[var(--ink-dim)]">{formatUsd(p.sizeUsd)} ({p.sizePct}%)</span>
                 <span style={{ color: p.unrealizedPercent >= 0 ? "var(--bull)" : "var(--bear)" }}>
@@ -65,6 +68,9 @@ export default function BotPanel({ title = "Paper-Trading Bot", book }) {
               <div key={`${p.ticker}-${p.closedAt}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono-board text-xs">
                 <TickerDecal ticker={p.ticker} size={18} />
                 <span className="font-bold text-[var(--ink)]">{p.ticker}</span>
+                {p.instrument === "option" && (
+                  <span className="rounded-sm border border-[var(--hairline)] px-1 text-[9px] text-[var(--ink-dim)]">OPT</span>
+                )}
                 <span className="text-[var(--ink-dim)]">{p.direction}</span>
                 <span style={{ color: (p.pnlUsd || 0) >= 0 ? "var(--bull)" : "var(--bear)" }}>
                   {formatUsd(p.pnlUsd)} ({formatPct(p.pnlPercent)})
