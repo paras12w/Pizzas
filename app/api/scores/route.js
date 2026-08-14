@@ -1,20 +1,51 @@
 import { NextResponse } from "next/server";
 import { discoverTrendingTickers, fetchTickerMentions } from "@/lib/reddit";
 import { fetchManySnapshots, fetchMarketMovers } from "@/lib/yahoo";
-import { scoreTicker, rankTop9, mergeWeights } from "@/lib/scoring";
-import { getAlerts, isPersistent, getWeights, saveWeights, getWeightHistory, appendWeightHistory, getPrevScores, savePrevScores } from "@/lib/store";
+import { scoreTicker, rankTopN, mergeWeights } from "@/lib/scoring";
+import {
+  getAlerts,
+  isPersistent,
+  getWeights,
+  saveWeights,
+  getWeightHistory,
+  appendWeightHistory,
+  getPrevBoard,
+  savePrevBoard,
+  getNotificationSettings,
+} from "@/lib/store";
 import { runBot, BOT_CONFIGS } from "@/lib/bot";
 import { shouldRecalibrate, recalibrateWeights } from "@/lib/calibration";
+import { notifyDiscord } from "@/lib/discord-notify";
+import { sendNotificationEmail } from "@/lib/email-notify";
 
 export const dynamic = "force-dynamic"; // never statically cache this route
 
+function attachTrend(entry, prevBoard, listKey) {
+  const prevConfidence = prevBoard?.scores?.[entry.ticker];
+  const confDelta = prevConfidence != null ? Math.round((entry.confidence - prevConfidence) * 10) / 10 : null;
+  const trend = confDelta == null ? null : { delta: confDelta, direction: confDelta > 0.4 ? "up" : confDelta < -0.4 ? "down" : "flat" };
+
+  const prevRank = prevBoard?.ranks?.[listKey]?.[entry.ticker];
+  const rankDelta = prevRank != null ? prevRank - entry.rank : null; // positive = moved up (better rank)
+  const rankTrend =
+    prevRank == null
+      ? null
+      : { delta: rankDelta, direction: rankDelta > 0 ? "up" : rankDelta < 0 ? "down" : "flat", isNew: false };
+
+  const wasPresent = prevBoard?.tickers?.[listKey]?.includes(entry.ticker);
+  const isNewEntrant = !wasPresent;
+
+  return { ...entry, trend, rankTrend, isNewEntrant };
+}
+
 export async function GET() {
   try {
-    const [redditCandidates, alerts, storedWeights, prevScores] = await Promise.all([
+    const [redditCandidates, alerts, storedWeights, prevBoard, notifSettings] = await Promise.all([
       discoverTrendingTickers(),
       getAlerts(),
       getWeights(),
-      getPrevScores(),
+      getPrevBoard(),
+      getNotificationSettings(),
     ]);
     const weights = mergeWeights(storedWeights);
 
@@ -84,20 +115,19 @@ export async function GET() {
       // picked up from noisy reddit text.
       .filter((s) => s.sources.yahoo || s.sources.discord);
 
-    // Trend: how each ticker's confidence moved since the previous cycle, so
-    // the board can show "rising" vs "fading" instead of just a static number.
-    const prevMap = prevScores?.scores || {};
-    const scoredWithTrend = scored.map((s) => {
-      const prev = prevMap[s.ticker];
-      const delta = prev != null ? Math.round((s.confidence - prev) * 10) / 10 : null;
-      return { ...s, trend: delta == null ? null : { delta, direction: delta > 0.4 ? "up" : delta < -0.4 ? "down" : "flat" } };
-    });
-    await savePrevScores(Object.fromEntries(scored.map((s) => [s.ticker, s.confidence])));
+    // Two independent boards instead of one: bullish candidates ranked as
+    // "buys," bearish candidates ranked as "sells" — same scoring math, just
+    // split by direction so a bearish mover with strong conviction shows up
+    // as a good short/put candidate instead of just falling off a single
+    // combined list.
+    const buyCandidates = scored.filter((s) => s.direction === "bullish");
+    const sellCandidates = scored.filter((s) => s.direction === "bearish");
+    const boardBuy = rankTopN(buyCandidates, 9).map((e) => attachTrend(e, prevBoard, "buy"));
+    const boardSell = rankTopN(sellCandidates, 9).map((e) => attachTrend(e, prevBoard, "sell"));
 
-    const top9 = rankTop9(scoredWithTrend);
     const [botA, botB] = await Promise.all([
-      runBot(scoredWithTrend, "a"),
-      runBot(scoredWithTrend, "b"),
+      runBot(scored, "a"),
+      runBot(scored, "b"),
     ]);
 
     // Weight calibration: once Bot A has traded enough, correlate each
@@ -118,10 +148,41 @@ export async function GET() {
       }
     }
 
+    // Notify on brand-new entrants to either top-9 list (not on every score
+    // wiggle — just when the list itself changes) if the previous cycle
+    // actually had data to compare against.
+    if (prevBoard?.at) {
+      const newBuys = boardBuy.filter((e) => e.isNewEntrant).map((e) => e.ticker);
+      const newSells = boardSell.filter((e) => e.isNewEntrant).map((e) => e.ticker);
+      if (newBuys.length || newSells.length) {
+        const parts = [];
+        if (newBuys.length) parts.push(`Buy list: ${newBuys.join(", ")}`);
+        if (newSells.length) parts.push(`Sell list: ${newSells.join(", ")}`);
+        const message = `Leaderboard update — ${parts.join(" · ")}`;
+        notifyDiscord(message);
+        if (notifSettings.enabled && notifSettings.email) {
+          sendNotificationEmail(notifSettings.email, "Signal Desk — leaderboard update", message);
+        }
+      }
+    }
+
+    await savePrevBoard({
+      scores: Object.fromEntries(scored.map((s) => [s.ticker, s.confidence])),
+      ranks: {
+        buy: Object.fromEntries(boardBuy.map((e) => [e.ticker, e.rank])),
+        sell: Object.fromEntries(boardSell.map((e) => [e.ticker, e.rank])),
+      },
+      tickers: {
+        buy: boardBuy.map((e) => e.ticker),
+        sell: boardSell.map((e) => e.ticker),
+      },
+    });
+
     return NextResponse.json({
       updatedAt: new Date().toISOString(),
       persistent: isPersistent(),
-      board: top9,
+      boardBuy,
+      boardSell,
       botA,
       botB,
       botConfigs: BOT_CONFIGS,

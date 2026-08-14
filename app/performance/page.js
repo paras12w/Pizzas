@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { formatPct, formatUsd, timeAgo } from "@/lib/format";
-import { Sparkline } from "../components/ui";
+import { DualLineChart } from "../components/ui";
 
 function StatTile({ label, value, tone }) {
   const color = tone === "bull" ? "var(--bull)" : tone === "bear" ? "var(--bear)" : "var(--ink)";
@@ -14,7 +14,7 @@ function StatTile({ label, value, tone }) {
   );
 }
 
-function BotSummary({ label, data }) {
+function BotColumn({ label, color, data }) {
   if (!data) return null;
   const { stats } = data;
   const allTimePct = stats.equity != null ? ((stats.equity - stats.startingCash) / stats.startingCash) * 100 : null;
@@ -22,27 +22,22 @@ function BotSummary({ label, data }) {
   return (
     <section className="rounded-md border border-[var(--hairline)] bg-[var(--panel)] p-4">
       <div className="mb-3 flex items-center justify-between">
-        <div className="font-mono-board text-sm font-bold text-[var(--amber)]">{label}</div>
+        <div className="flex items-center gap-2">
+          <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: color }} />
+          <span className="font-mono-board text-sm font-bold" style={{ color }}>{label}</span>
+        </div>
         <div className="font-mono-board text-sm text-[var(--ink)]">{formatUsd(stats.equity)}</div>
       </div>
 
-      <div className="mb-4">
-        <Sparkline candles={stats.equityCurve.map((e) => ({ close: e.equity }))} />
-      </div>
-
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2">
         <StatTile label="All-time" value={formatPct(allTimePct)} tone={allTimePct >= 0 ? "bull" : "bear"} />
         <StatTile label="Win rate" value={stats.winRate != null ? `${stats.winRate}%` : "—"} />
-        <StatTile label="Closed trades" value={stats.closedCount} />
-        <StatTile label="Open positions" value={stats.openCount} />
-        <StatTile label="Avg win" value={formatUsd(stats.avgWinUsd)} tone="bull" />
-        <StatTile label="Avg loss" value={formatUsd(stats.avgLossUsd)} tone="bear" />
+        <StatTile label="Closed / open" value={`${stats.closedCount} / ${stats.openCount}`} />
         <StatTile label="Realized P&L" value={formatUsd(stats.totalRealizedUsd)} tone={stats.totalRealizedUsd >= 0 ? "bull" : "bear"} />
-        <StatTile label="Unrealized P&L" value={formatUsd(stats.openUnrealizedUsd)} tone={stats.openUnrealizedUsd >= 0 ? "bull" : "bear"} />
       </div>
 
       {(stats.bestTrade || stats.worstTrade) && (
-        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
           {stats.bestTrade && (
             <div className="rounded-sm border border-[var(--hairline)] px-3 py-2 font-mono-board text-xs">
               <span className="text-[var(--ink-dim)]">Best: </span>
@@ -95,7 +90,7 @@ export default function PerformancePage() {
       <header className="mb-8 border-b border-[var(--hairline)] pb-4">
         <h1 className="font-mono-board text-2xl font-black tracking-tight text-[var(--amber)]">PERFORMANCE</h1>
         <p className="mt-1 text-xs sm:text-sm text-[var(--ink-dim)]">
-          Both bots start from a simulated $10,000 bankroll. Equity curve replays realized P&amp;L trade-by-trade —
+          Both bots start from a simulated $10,000 bankroll. Equity curves replay realized P&amp;L trade-by-trade —
           {" "}{updatedAt ? timeAgo(updatedAt) : ""}
         </p>
       </header>
@@ -104,10 +99,25 @@ export default function PerformancePage() {
       {status === "error" && <div className="text-sm text-[var(--bear)] font-mono-board">Failed to load performance data.</div>}
 
       {data && (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <BotSummary label="Bot A (featured)" data={data.a} />
-          <BotSummary label="Bot B (experimental)" data={data.b} />
-        </div>
+        <>
+          <section className="mb-6 rounded-md border border-[var(--hairline)] bg-[var(--panel)] p-4">
+            <div className="mb-1 text-[10px] uppercase tracking-widest text-[var(--ink-dim)]">Equity curves</div>
+            <DualLineChart
+              seriesA={data.a.stats.equityCurve.map((e) => e.equity)}
+              seriesB={data.b.stats.equityCurve.map((e) => e.equity)}
+              labelA="Bot A"
+              labelB="Bot B"
+              colorA="var(--amber)"
+              colorB="var(--bull)"
+              baseline={10000}
+            />
+          </section>
+
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <BotColumn label="Bot A (featured)" color="var(--amber)" data={data.a} />
+            <BotColumn label="Bot B (experimental)" color="var(--bull)" data={data.b} />
+          </div>
+        </>
       )}
     </main>
   );

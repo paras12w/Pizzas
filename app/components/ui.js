@@ -107,3 +107,74 @@ export function TrendBadge({ trend }) {
   }
   return <span className="text-[var(--ink-dim)]">flat</span>;
 }
+
+// Literal list-position movement — entry.rankTrend is { delta, direction }
+// (delta = spots moved, positive = climbed the list) from app/api/scores.
+// Shows "NEW" for a ticker that wasn't on this list last cycle at all,
+// since there's no prior rank to compare against yet.
+export function RankMoveBadge({ rankTrend, isNewEntrant }) {
+  if (isNewEntrant) {
+    return (
+      <span className="rounded-sm bg-[var(--amber)]/20 px-1 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[var(--amber)]">
+        New
+      </span>
+    );
+  }
+  if (!rankTrend || rankTrend.direction === "flat") {
+    return <span className="text-[var(--ink-dim)] opacity-50">–</span>;
+  }
+  if (rankTrend.direction === "up") {
+    return <span style={{ color: "var(--bull)" }}>▲{rankTrend.delta}</span>;
+  }
+  return <span style={{ color: "var(--bear)" }}>▼{Math.abs(rankTrend.delta)}</span>;
+}
+
+// Two overlaid equity curves on one chart, with a dashed break-even
+// reference line at the shared starting balance.
+export function DualLineChart({ seriesA, seriesB, labelA, labelB, colorA = "var(--amber)", colorB = "var(--bull)", baseline }) {
+  const hasData = (seriesA?.length || 0) > 1 || (seriesB?.length || 0) > 1;
+  if (!hasData) {
+    return (
+      <div className="flex h-56 items-center justify-center text-xs text-[var(--ink-dim)] font-mono-board">
+        Not enough closed trades yet to chart.
+      </div>
+    );
+  }
+
+  const w = 700;
+  const h = 220;
+  const pad = 12;
+  const allValues = [...(seriesA || []), ...(seriesB || []), baseline].filter((v) => v != null);
+  const min = Math.min(...allValues);
+  const max = Math.max(...allValues);
+  const range = max - min || 1;
+
+  const y = (v) => h - pad - ((v - min) / range) * (h - pad * 2);
+  const toPoints = (series) =>
+    (series || [])
+      .map((v, i) => {
+        const x = pad + (i / Math.max(1, series.length - 1)) * (w - pad * 2);
+        return `${x.toFixed(1)},${y(v).toFixed(1)}`;
+      })
+      .join(" ");
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="h-56 w-full" preserveAspectRatio="none">
+        {baseline != null && (
+          <line x1={pad} y1={y(baseline)} x2={w - pad} y2={y(baseline)} stroke="var(--hairline)" strokeDasharray="4 4" strokeWidth="1" />
+        )}
+        <polyline points={toPoints(seriesA)} fill="none" stroke={colorA} strokeWidth="2.5" />
+        <polyline points={toPoints(seriesB)} fill="none" stroke={colorB} strokeWidth="2.5" />
+      </svg>
+      <div className="mt-2 flex items-center justify-center gap-6 text-[11px] font-mono-board">
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2 w-2 rounded-full" style={{ background: colorA }} /> {labelA}
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2 w-2 rounded-full" style={{ background: colorB }} /> {labelB}
+        </span>
+      </div>
+    </div>
+  );
+}
