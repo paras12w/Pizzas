@@ -165,7 +165,12 @@ in dev, so you'll see live data locally too.
 - **Take threshold:** `TAKE_THRESHOLD` in `lib/scoring.js` (currently 72,
   used for the board's "Taken" badge and Bot A's default)
 - **Alert confidence floor:** `ALERT_MIN_CONFIDENCE` in `lib/scoring.js` (currently 78)
-- **Bot configs (threshold, exit, sizing, max hold):** `BOT_CONFIGS` in `lib/bot.js`
+- **Quality gates (penny stocks, thin liquidity, anomalous moves):**
+  `MIN_TRADABLE_PRICE`, `MIN_AVG_VOLUME`, `EXTREME_MOVE_PCT` in
+  `lib/scoring.js` — a ticker failing any of these is excluded from scoring
+  entirely (never ranked, never traded), even if it has a Discord alert.
+- **Bot configs (threshold, exit, stop-loss, take-profit, sizing, max hold):**
+  `BOT_CONFIGS` in `lib/bot.js`
 - **Calibration sensitivity:** `MIN_SAMPLE`, `RECALIBRATION_STEP`, `NUDGE_CAP`
   in `lib/calibration.js`
 - **Refresh interval:** `REFRESH_MS` in `app/page.js` (currently 15s)
