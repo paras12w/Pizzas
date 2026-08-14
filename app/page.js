@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { TAKE_THRESHOLD } from "@/lib/scoring";
 import { timeAgo } from "@/lib/format";
 import BoardRow from "./components/BoardRow";
 import AlertPanel from "./components/AlertPanel";
 import BotPanel from "./components/BotPanel";
 import TickerDetail from "./components/TickerDetail";
 import NotificationBell from "./components/NotificationBell";
+import HowItWorks from "./components/HowItWorks";
 
 // Polls fast (was 5min, then 1min) per request — kept the candidate pool
 // modest in app/api/scores/route.js to stay under Yahoo's informal rate
@@ -227,9 +227,9 @@ export default function Page() {
           </div>
 
           <p className="mt-3 text-[11px] text-[var(--ink-dim)] font-mono-board">
-            Each list always shows the current top 9 by direction, ranked best-to-worst — even on a slow day. Bot A
-            opens a paper position once confidence crosses {TAKE_THRESHOLD}; any logged Discord alert always clears
-            it. Click a ticker for its chart and score breakdown. Refreshes every {REFRESH_MS / 1000}s.
+            Each list always shows the current top 9 by direction, ranked best-to-worst — even on a slow day. Click a
+            ticker for its chart and score breakdown. Refreshes every {REFRESH_MS / 1000}s — how it all works is
+            explained in the panel to the right.
           </p>
         </section>
 
@@ -242,6 +242,7 @@ export default function Page() {
             alertStatus={alertStatus}
           />
           <BotPanel title="Bot A — Paper Trading" book={botA} />
+          <HowItWorks refreshSeconds={REFRESH_MS / 1000} />
         </div>
       </div>
 
