@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { discoverTrendingTickers, fetchTickerMentions } from "@/lib/reddit";
-import { fetchManySnapshots } from "@/lib/yahoo";
+import { fetchManySnapshots, fetchMarketMovers } from "@/lib/yahoo";
 import { scoreTicker, rankTop9 } from "@/lib/scoring";
 import { getAlerts, isPersistent } from "@/lib/store";
 import { runBot } from "@/lib/bot";
@@ -32,19 +32,42 @@ export async function GET() {
       })
     );
 
-    const candidates = [...topReddit, ...backfilled];
-    const maxWeightedScore = Math.max(...candidates.map((c) => c.weightedScore || 0), 1);
+    const redditEntryByTicker = new Map(
+      [...topReddit, ...backfilled].map((c) => [c.ticker, c])
+    );
 
-    const snapshots = await fetchManySnapshots(candidates.map((c) => c.ticker));
+    // Reddit's public JSON endpoints frequently block cloud/serverless IPs
+    // outright (Vercel included), independent of User-Agent, which can leave
+    // redditEntryByTicker empty on a given deploy. When that happens, backfill
+    // with Yahoo's own live movers so the board is never empty just because
+    // Reddit refused this request.
+    let allTickers = [...redditEntryByTicker.keys()];
+    if (allTickers.length < 9) {
+      const movers = await fetchMarketMovers();
+      const existing = new Set(allTickers);
+      for (const ticker of movers) {
+        if (!existing.has(ticker)) {
+          existing.add(ticker);
+          allTickers.push(ticker);
+        }
+      }
+    }
+
+    const maxWeightedScore = Math.max(
+      ...[...redditEntryByTicker.values()].map((c) => c.weightedScore || 0),
+      1
+    );
+
+    const snapshots = await fetchManySnapshots(allTickers);
     const snapshotByTicker = new Map(snapshots.map((s) => [s.ticker, s]));
     const alertByTicker = new Map(alerts.map((a) => [a.ticker, a]));
 
-    const scored = candidates
-      .map((c) =>
+    const scored = allTickers
+      .map((ticker) =>
         scoreTicker(
-          c,
-          snapshotByTicker.get(c.ticker),
-          alertByTicker.get(c.ticker) || null,
+          redditEntryByTicker.get(ticker) || null,
+          snapshotByTicker.get(ticker),
+          alertByTicker.get(ticker) || null,
           maxWeightedScore
         )
       )
