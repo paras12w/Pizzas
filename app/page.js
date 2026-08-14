@@ -3,7 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import { TAKE_THRESHOLD } from "@/lib/scoring";
 
-const REFRESH_MS = 60 * 1000; // 1 minute
+// Polls fast (was 5min, then 1min) per request — kept the candidate pool
+// modest in app/api/scores/route.js to stay under Yahoo's informal rate
+// limits at this cadence. If you start seeing "ERROR" flashes, back this off
+// first.
+const REFRESH_MS = 15 * 1000;
+
+const MIN_VIEWERS = 45;
+const MAX_VIEWERS = 56;
 
 function timeAgo(iso) {
   if (!iso) return "—";
@@ -24,6 +31,42 @@ function formatDuration(ms) {
 function formatPct(n) {
   if (n == null) return "—";
   return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
+}
+
+function formatScore(n) {
+  if (n == null) return "—";
+  return n.toFixed(1);
+}
+
+// Ambient "who's watching" flourish — not a real visitor count, just a
+// slow-drifting number in a fixed band so the board doesn't feel static.
+function useActiveViewers() {
+  const [count, setCount] = useState(() => MIN_VIEWERS + Math.floor(Math.random() * (MAX_VIEWERS - MIN_VIEWERS + 1)));
+
+  useEffect(() => {
+    let cancelled = false;
+    let timeoutId;
+
+    function tick() {
+      const delay = 3000 + Math.random() * 4000;
+      timeoutId = setTimeout(() => {
+        if (cancelled) return;
+        setCount((c) => {
+          const step = (Math.random() < 0.5 ? -1 : 1) * (Math.random() < 0.2 ? 2 : 1);
+          return Math.max(MIN_VIEWERS, Math.min(MAX_VIEWERS, c + step));
+        });
+        tick();
+      }, delay);
+    }
+    tick();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, []);
+
+  return count;
 }
 
 function Meter({ value, tone }) {
@@ -123,6 +166,14 @@ function TickerDetail({ ticker, entry, botPosition, onClose }) {
     };
   }, [ticker]);
 
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 px-3 py-8 sm:px-6" onClick={onClose}>
       <div
@@ -162,7 +213,7 @@ function TickerDetail({ ticker, entry, botPosition, onClose }) {
             <div>
               <div className="flex justify-between text-[10px] uppercase tracking-widest text-[var(--ink-dim)] mb-1">
                 <span>Confidence</span>
-                <span className="font-mono-board text-[var(--ink)]">{entry.confidence}</span>
+                <span className="font-mono-board text-[var(--ink)]">{formatScore(entry.confidence)}</span>
               </div>
               <Meter value={entry.confidence} tone="amber" />
               <div className="mt-3">
@@ -172,7 +223,7 @@ function TickerDetail({ ticker, entry, botPosition, onClose }) {
             <div>
               <div className="flex justify-between text-[10px] uppercase tracking-widest text-[var(--ink-dim)] mb-1">
                 <span>Benefit</span>
-                <span className="font-mono-board text-[var(--ink)]">{entry.benefit}</span>
+                <span className="font-mono-board text-[var(--ink)]">{formatScore(entry.benefit)}</span>
               </div>
               <Meter value={entry.benefit} tone={entry.direction === "bearish" ? "bear" : "bull"} />
               <div className="mt-3">
@@ -220,12 +271,22 @@ function TickerDetail({ ticker, entry, botPosition, onClose }) {
 function BoardRow({ entry, onSelect }) {
   const dirColor = entry.direction === "bearish" ? "var(--bear)" : "var(--bull)";
   const chg = entry.changePercent;
+  const isTop = entry.rank === 1;
+
   return (
     <button
       onClick={() => onSelect(entry.ticker)}
-      className="flip-in grid w-full grid-cols-[3rem_5rem_1fr_1fr_5.5rem_4rem] items-center gap-3 sm:gap-4 border-b border-[var(--hairline)] px-3 sm:px-4 py-3 text-left transition-colors hover:bg-[var(--panel-2)]"
+      className={`flip-in grid w-full grid-cols-[3rem_5rem_1fr_1fr_5.5rem_4rem] items-center gap-3 sm:gap-4 border-b border-[var(--hairline)] px-3 sm:px-4 py-3 text-left transition-colors hover:bg-[var(--panel-2)] ${isTop ? "bg-[var(--amber)]/[0.05]" : ""}`}
+      style={{ borderLeft: `3px solid ${dirColor}66` }}
     >
-      <div className="font-mono-board text-2xl font-bold" style={{ color: "var(--amber)" }}>
+      <div
+        className="font-mono-board text-2xl font-bold"
+        style={{
+          color: isTop ? "var(--amber)" : entry.rank <= 3 ? "var(--amber)" : "var(--ink-dim)",
+          opacity: isTop ? 1 : entry.rank <= 3 ? 0.85 : 0.6,
+          textShadow: isTop ? "0 0 14px rgba(242,169,59,0.5)" : "none",
+        }}
+      >
         {String(entry.rank).padStart(2, "0")}
       </div>
 
@@ -246,7 +307,7 @@ function BoardRow({ entry, onSelect }) {
       <div>
         <div className="flex justify-between text-[10px] uppercase tracking-widest text-[var(--ink-dim)] mb-1">
           <span>Confidence</span>
-          <span className="font-mono-board text-[var(--ink)]">{entry.confidence}</span>
+          <span className="font-mono-board text-[var(--ink)]">{formatScore(entry.confidence)}</span>
         </div>
         <Meter value={entry.confidence} tone="amber" />
       </div>
@@ -254,7 +315,7 @@ function BoardRow({ entry, onSelect }) {
       <div>
         <div className="flex justify-between text-[10px] uppercase tracking-widest text-[var(--ink-dim)] mb-1">
           <span>Benefit</span>
-          <span className="font-mono-board text-[var(--ink)]">{entry.benefit}</span>
+          <span className="font-mono-board text-[var(--ink)]">{formatScore(entry.benefit)}</span>
         </div>
         <Meter value={entry.benefit} tone={entry.direction === "bearish" ? "bear" : "bull"} />
       </div>
@@ -281,12 +342,45 @@ function BoardRow({ entry, onSelect }) {
   );
 }
 
+function AlertPanel({ alertText, setAlertText, onSubmit, submitting, alertStatus }) {
+  return (
+    <section className="rounded-md border border-[var(--hairline)] bg-[var(--panel)]">
+      <div className="border-b border-[var(--hairline)] px-4 py-3 text-xs uppercase tracking-widest text-[var(--ink-dim)]">
+        Log a Discord Alert
+      </div>
+      <form onSubmit={onSubmit} className="px-4 py-4">
+        <textarea
+          value={alertText}
+          onChange={(e) => setAlertText(e.target.value)}
+          placeholder='Paste the alert exactly as posted, e.g. "BUY QQQ 450C 8/15 @ 2.10 — momentum off open"'
+          rows={4}
+          className="w-full resize-none rounded-sm border border-[var(--hairline)] bg-black/30 px-3 py-2 text-sm font-mono-board text-[var(--ink)] placeholder:text-[var(--ink-dim)] focus:outline-none focus:ring-1 focus:ring-[var(--amber)]"
+        />
+        <div className="mt-3 flex items-center gap-3">
+          <button
+            type="submit"
+            disabled={submitting || !alertText.trim()}
+            className="rounded-sm bg-[var(--amber)] px-4 py-2 text-xs font-bold uppercase tracking-wider text-black disabled:opacity-40"
+          >
+            {submitting ? "Logging…" : "Log Alert"}
+          </button>
+        </div>
+        {alertStatus && (
+          <div className={`mt-2 text-xs ${alertStatus.ok ? "text-[var(--bull)]" : "text-[var(--bear)]"}`}>
+            {alertStatus.message}
+          </div>
+        )}
+      </form>
+    </section>
+  );
+}
+
 function BotPanel({ bot }) {
   const open = bot?.open || [];
   const closed = bot?.closed || [];
 
   return (
-    <section className="mt-10 rounded-md border border-[var(--hairline)] bg-[var(--panel)]">
+    <section className="rounded-md border border-[var(--hairline)] bg-[var(--panel)]">
       <div className="border-b border-[var(--hairline)] px-4 py-3 text-xs uppercase tracking-widest text-[var(--ink-dim)]">
         Paper-Trading Bot
       </div>
@@ -300,7 +394,7 @@ function BotPanel({ bot }) {
         ) : (
           <div className="space-y-2">
             {open.map((p) => (
-              <div key={p.ticker} className="flex items-center justify-between font-mono-board text-xs">
+              <div key={p.ticker} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 font-mono-board text-xs">
                 <span className="font-bold" style={{ color: "var(--amber)" }}>{p.ticker}</span>
                 <span className="text-[var(--ink-dim)]">{p.direction}</span>
                 <span className="text-[var(--ink-dim)]">${p.entryPrice?.toFixed(2)} → ${p.lastPrice?.toFixed(2)}</span>
@@ -314,14 +408,16 @@ function BotPanel({ bot }) {
         )}
       </div>
 
-      {closed.length > 0 && (
-        <div className="border-t border-[var(--hairline)] px-4 py-4">
-          <div className="mb-2 text-[10px] uppercase tracking-widest text-[var(--ink-dim)]">
-            Recent closed trades
-          </div>
-          <div className="space-y-2">
-            {closed.slice(0, 8).map((p) => (
-              <div key={`${p.ticker}-${p.closedAt}`} className="flex items-center justify-between font-mono-board text-xs">
+      <div className="border-t border-[var(--hairline)] px-4 py-4">
+        <div className="mb-2 text-[10px] uppercase tracking-widest text-[var(--ink-dim)]">
+          Trade history
+        </div>
+        {closed.length === 0 ? (
+          <div className="text-xs text-[var(--ink-dim)] font-mono-board">No closed trades yet.</div>
+        ) : (
+          <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+            {closed.map((p) => (
+              <div key={`${p.ticker}-${p.closedAt}`} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 font-mono-board text-xs">
                 <span className="font-bold text-[var(--ink)]">{p.ticker}</span>
                 <span className="text-[var(--ink-dim)]">{p.direction}</span>
                 <span style={{ color: p.pnlPercent >= 0 ? "var(--bull)" : "var(--bear)" }}>
@@ -331,8 +427,8 @@ function BotPanel({ bot }) {
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </section>
   );
 }
@@ -344,17 +440,22 @@ export default function Page() {
   const [persistent, setPersistent] = useState(true);
   const [status, setStatus] = useState("loading"); // loading | ok | error
   const [errorMsg, setErrorMsg] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
   const [, setNowTick] = useState(Date.now());
   const [selectedTicker, setSelectedTicker] = useState(null);
+  const viewers = useActiveViewers();
 
   const [alertText, setAlertText] = useState("");
-  const [alertPanelOpen, setAlertPanelOpen] = useState(false);
   const [alertStatus, setAlertStatus] = useState(null); // { ok, message }
   const [submitting, setSubmitting] = useState(false);
 
   const pollRef = useRef(null);
+  const isFetchingRef = useRef(false);
 
-  async function loadBoard() {
+  async function loadBoard({ background = false } = {}) {
+    if (isFetchingRef.current) return; // don't overlap requests at a 15s cadence
+    isFetchingRef.current = true;
+    if (background) setRefreshing(true);
     try {
       const res = await fetch("/api/scores", { cache: "no-store" });
       const data = await res.json();
@@ -367,12 +468,15 @@ export default function Page() {
     } catch (err) {
       setErrorMsg(err.message);
       setStatus("error");
+    } finally {
+      isFetchingRef.current = false;
+      if (background) setRefreshing(false);
     }
   }
 
   useEffect(() => {
     loadBoard();
-    pollRef.current = setInterval(loadBoard, REFRESH_MS);
+    pollRef.current = setInterval(() => loadBoard({ background: true }), REFRESH_MS);
     const tick = setInterval(() => setNowTick(Date.now()), 1000);
     return () => {
       clearInterval(pollRef.current);
@@ -411,8 +515,8 @@ export default function Page() {
     : null;
 
   return (
-    <main className="mx-auto max-w-4xl px-3 sm:px-6 py-8 sm:py-12">
-      <header className="mb-8 flex items-end justify-between border-b border-[var(--hairline)] pb-4">
+    <main className="mx-auto max-w-7xl px-3 sm:px-6 py-8 sm:py-12">
+      <header className="mb-8 flex flex-wrap items-end justify-between gap-3 border-b border-[var(--hairline)] pb-4">
         <div>
           <h1 className="font-mono-board text-2xl sm:text-3xl font-black tracking-tight text-[var(--amber)]">
             SIGNAL&nbsp;DESK
@@ -423,8 +527,12 @@ export default function Page() {
         </div>
         <div className="text-right font-mono-board text-[11px] text-[var(--ink-dim)]">
           <div className="flex items-center justify-end gap-1.5">
+            <span className="live-dot h-1.5 w-1.5 rounded-full bg-[var(--ink-dim)]" />
+            {viewers} watching
+          </div>
+          <div className="mt-1 flex items-center justify-end gap-1.5">
             <span className={`h-1.5 w-1.5 rounded-full ${status === "ok" ? "live-dot bg-[var(--bull)]" : status === "error" ? "bg-[var(--bear)]" : "bg-[var(--ink-dim)]"}`} />
-            {status === "ok" ? "LIVE" : status === "error" ? "ERROR" : "LOADING"}
+            {status === "ok" ? (refreshing ? "REFRESHING" : "LIVE") : status === "error" ? "ERROR" : "LOADING"}
           </div>
           <div>{updatedAt ? timeAgo(updatedAt) : ""}</div>
         </div>
@@ -442,76 +550,53 @@ export default function Page() {
         </div>
       )}
 
-      <section className="rounded-md border border-[var(--hairline)] bg-[var(--panel)] overflow-hidden">
-        <div className="grid grid-cols-[3rem_5rem_1fr_1fr_5.5rem_4rem] gap-3 sm:gap-4 border-b border-[var(--hairline)] bg-[var(--panel-2)] px-3 sm:px-4 py-2 text-[10px] uppercase tracking-widest text-[var(--ink-dim)]">
-          <div>Rank</div>
-          <div>Ticker</div>
-          <div>Confidence</div>
-          <div>Benefit</div>
-          <div>Status</div>
-          <div>Src</div>
-        </div>
-
-        {status === "loading" && (
-          <div className="px-4 py-10 text-center text-sm text-[var(--ink-dim)] font-mono-board">
-            Scanning Reddit + Yahoo Finance…
-          </div>
-        )}
-
-        {status === "ok" && board.length === 0 && (
-          <div className="px-4 py-10 text-center text-sm text-[var(--ink-dim)] font-mono-board">
-            No candidates found this cycle. Board refreshes automatically.
-          </div>
-        )}
-
-        {board.map((entry) => (
-          <BoardRow key={entry.ticker} entry={entry} onSelect={setSelectedTicker} />
-        ))}
-      </section>
-
-      <p className="mt-3 text-[11px] text-[var(--ink-dim)] font-mono-board">
-        Board always shows the current top 9 candidates, ranked best-to-worst — even on a slow day. Bot opens a
-        paper position once confidence crosses {TAKE_THRESHOLD}. Click a ticker for its chart and score breakdown.
-        Refreshes every minute.
-      </p>
-
-      <BotPanel bot={bot} />
-
-      <section className="mt-10 rounded-md border border-[var(--hairline)] bg-[var(--panel)]">
-        <button
-          onClick={() => setAlertPanelOpen((v) => !v)}
-          className="flex w-full items-center justify-between px-4 py-3 text-left text-xs uppercase tracking-widest text-[var(--ink-dim)] hover:text-[var(--amber)] transition-colors"
-        >
-          <span>Log a Discord Alert</span>
-          <span className="font-mono-board">{alertPanelOpen ? "−" : "+"}</span>
-        </button>
-
-        {alertPanelOpen && (
-          <form onSubmit={submitAlert} className="border-t border-[var(--hairline)] px-4 py-4">
-            <textarea
-              value={alertText}
-              onChange={(e) => setAlertText(e.target.value)}
-              placeholder="Paste the alert exactly as posted, e.g. &ldquo;BUY QQQ 450C 8/15 @ 2.10 — momentum off open&rdquo;"
-              rows={3}
-              className="w-full resize-none rounded-sm border border-[var(--hairline)] bg-black/30 px-3 py-2 text-sm font-mono-board text-[var(--ink)] placeholder:text-[var(--ink-dim)] focus:outline-none focus:ring-1 focus:ring-[var(--amber)]"
-            />
-            <div className="mt-3 flex items-center gap-3">
-              <button
-                type="submit"
-                disabled={submitting || !alertText.trim()}
-                className="rounded-sm bg-[var(--amber)] px-4 py-2 text-xs font-bold uppercase tracking-wider text-black disabled:opacity-40"
-              >
-                {submitting ? "Logging…" : "Log Alert"}
-              </button>
-              {alertStatus && (
-                <span className={`text-xs ${alertStatus.ok ? "text-[var(--bull)]" : "text-[var(--bear)]"}`}>
-                  {alertStatus.message}
-                </span>
-              )}
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
+        <section>
+          <div className="rounded-md border border-[var(--hairline)] bg-[var(--panel)] overflow-hidden">
+            <div className="grid grid-cols-[3rem_5rem_1fr_1fr_5.5rem_4rem] gap-3 sm:gap-4 border-b border-[var(--hairline)] bg-[var(--panel-2)] px-3 sm:px-4 py-2 text-[10px] uppercase tracking-widest text-[var(--ink-dim)]">
+              <div>Rank</div>
+              <div>Ticker</div>
+              <div>Confidence</div>
+              <div>Benefit</div>
+              <div>Status</div>
+              <div>Src</div>
             </div>
-          </form>
-        )}
-      </section>
+
+            {status === "loading" && (
+              <div className="px-4 py-10 text-center text-sm text-[var(--ink-dim)] font-mono-board">
+                Scanning Reddit + Yahoo Finance…
+              </div>
+            )}
+
+            {status === "ok" && board.length === 0 && (
+              <div className="px-4 py-10 text-center text-sm text-[var(--ink-dim)] font-mono-board">
+                No candidates found this cycle. Board refreshes automatically.
+              </div>
+            )}
+
+            {board.map((entry) => (
+              <BoardRow key={entry.ticker} entry={entry} onSelect={setSelectedTicker} />
+            ))}
+          </div>
+
+          <p className="mt-3 text-[11px] text-[var(--ink-dim)] font-mono-board">
+            Board always shows the current top 9 candidates, ranked best-to-worst — even on a slow day. Bot opens a
+            paper position once confidence crosses {TAKE_THRESHOLD}. Click a ticker for its chart and score
+            breakdown. Refreshes every {REFRESH_MS / 1000}s.
+          </p>
+        </section>
+
+        <div className="flex flex-col gap-6">
+          <AlertPanel
+            alertText={alertText}
+            setAlertText={setAlertText}
+            onSubmit={submitAlert}
+            submitting={submitting}
+            alertStatus={alertStatus}
+          />
+          <BotPanel bot={bot} />
+        </div>
+      </div>
 
       {selectedTicker && (
         <TickerDetail
