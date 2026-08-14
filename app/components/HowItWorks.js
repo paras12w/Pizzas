@@ -1,6 +1,6 @@
 "use client";
 
-import { TAKE_THRESHOLD, ALERT_MIN_CONFIDENCE } from "@/lib/scoring";
+import { TAKE_THRESHOLD, ALERT_MIN_CONFIDENCE, MIN_TRADABLE_PRICE, MIN_AVG_VOLUME, EXTREME_MOVE_PCT } from "@/lib/scoring";
 import { BOT_CONFIGS } from "@/lib/bot";
 
 function Step({ n, title, children }) {
@@ -37,17 +37,22 @@ export default function HowItWorks({ refreshSeconds }) {
           Scans Reddit (r/wallstreetbets + friends) for ticker mentions and tone, plus Yahoo&apos;s live movers and
           analyst ratings, every {refreshSeconds}s.
         </Step>
-        <Step n="2" title="Scoring">
-          Each ticker gets a Confidence score (0–100, how much the signals agree) and a Benefit score (0–100, how
-          favorable the setup looks). Bullish ones rank on Buy, bearish ones on Sell.
+        <Step n="2" title="Filters">
+          Anything under ${MIN_TRADABLE_PRICE} (penny-stock risk), under {Math.round(MIN_AVG_VOLUME / 1000)}K avg
+          volume (thin liquidity), or moving more than {EXTREME_MOVE_PCT}% (likely a halt gap or bad data) gets
+          excluded before scoring — even if it came with a Discord alert.
         </Step>
-        <Step n="3" title="Entry">
+        <Step n="3" title="Scoring">
+          Each surviving ticker gets a Confidence score (0–100, how much the signals agree) and a Benefit score
+          (0–100, how favorable the setup looks). Bullish ones rank on Buy, bearish ones on Sell.
+        </Step>
+        <Step n="4" title="Entry">
           Bot A opens a position once Confidence crosses <strong className="text-[var(--ink)]">{TAKE_THRESHOLD}</strong>.
           Any logged Discord alert always clears that (floored to {ALERT_MIN_CONFIDENCE}). Size scales{" "}
           {Math.round(a.minSizePct * 100)}–{Math.round(a.maxSizePct * 100)}% of current bankroll with how strong the
           entry was.
         </Step>
-        <Step n="4" title="Exit">
+        <Step n="5" title="Exit">
           Closes on a <strong className="text-[var(--ink)]">{a.stopLossPct}% stop-loss</strong>, a{" "}
           <strong className="text-[var(--ink)]">{a.takeProfitPct}% take-profit</strong>, the ticker falling off its
           list, confidence decaying below {a.exitThreshold}, or a {holdHours}h max hold — whichever comes first.

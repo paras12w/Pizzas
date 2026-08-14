@@ -138,8 +138,13 @@ export async function GET() {
         )
       )
       // Drop tickers Yahoo couldn't resolve at all — usually not real symbols
-      // picked up from noisy reddit text.
-      .filter((s) => s.sources.yahoo || s.sources.discord);
+      // picked up from noisy reddit text — and anything that failed a
+      // quality gate (penny stock, thin liquidity, or an anomalous move
+      // that's more likely a halt gap / data glitch than real signal). This
+      // applies even to Discord-alerted tickers on purpose: pump-and-dump
+      // alert groups specifically target penny stocks, so exempting alerts
+      // from the gate would defeat the point of having it.
+      .filter((s) => (s.sources.yahoo || s.sources.discord) && s.tradeable);
 
     // Two independent boards instead of one: bullish candidates ranked as
     // "buys," bearish candidates ranked as "sells" — same scoring math, just
