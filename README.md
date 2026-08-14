@@ -19,22 +19,33 @@ account, no login, no manual running required once it's deployed.
   4. Folds in any Discord alerts you've logged (see below).
   5. Scores each candidate on two 0–100 axes — **Confidence** (how much the
      signals agree the bot would take this trade) and **Benefit** (how
-     favorable the setup looks if taken) — and returns the top 9 by a
-     blended overall score. A ticker is marked **Taken** once Confidence
-     crosses 72, mirroring your paper-trading bot's threshold.
-- The page (`app/page.js`) polls that route every 5 minutes and re-renders.
-  Nothing on the page is clickable except the "Log a Discord Alert" panel —
-  everything else is read-only display.
+     favorable the setup looks if taken) — and returns the **top 9 by
+     blended overall score, always** — even on a slow day where nothing
+     clears the take threshold, the board still shows the 9 best of what's
+     out there, ranked. A ticker is marked **Taken** once Confidence
+     crosses 72.
+  6. Runs the paper-trading bot (`lib/bot.js`) against those same scores:
+     opens a simulated position the moment a ticker crosses the Taken
+     threshold, tracks its unrealized P&L against live price on every
+     refresh, and closes it when confidence decays, the ticker falls off
+     the board, or it's been held 6+ hours. Positions persist in the same
+     store as Discord alerts.
+- The page (`app/page.js`) polls that route every minute and re-renders.
+  Click any ticker on the leaderboard to open its detail view: an intraday
+  price chart plus a plain-English breakdown of exactly which signals (and
+  how many points each) produced its Confidence and Benefit scores, along
+  with the bot's position on that ticker if it has one.
 
 **Important nuance on "standalone":** the scoring only runs when
 `/api/scores` is hit. With just client polling, that means it only
 recomputes while someone has the page open. That's normal and fine for a
 public dashboard. If you want it to keep updating even with zero visitors
-(e.g. for logging "Taken" trades to a persistent list later), you'd add a
+(e.g. so the bot keeps managing open positions unattended), you'd add a
 scheduled job — Vercel's free Hobby plan caps its built-in Cron to once a
-day, so once-a-day is fine for free; for anything more frequent you'd
-either upgrade to Vercel Pro or use a free external pinger (e.g.
-cron-job.org) hitting your `/api/scores` URL every few minutes.
+day, so once-a-day is fine for free; for anything more frequent (like
+matching the 1-minute client refresh) you'd either upgrade to Vercel Pro or
+use a free external pinger (e.g. cron-job.org) hitting your `/api/scores`
+URL every minute.
 
 ## The one input: logging a Discord alert
 
@@ -74,4 +85,6 @@ in dev, so you'll see live data locally too.
 - **Scoring weights:** `lib/scoring.js` — confidence and benefit are each
   built from a weighted sum of signals; adjust the multipliers there.
 - **Take threshold:** `TAKE_THRESHOLD` in `lib/scoring.js` (currently 72).
-- **Refresh interval:** `REFRESH_MS` in `app/page.js` (currently 5 min).
+- **Bot exit rules:** `EXIT_THRESHOLD` (confidence decay) and `MAX_HOLD_MS`
+  (time-based exit) in `lib/bot.js`.
+- **Refresh interval:** `REFRESH_MS` in `app/page.js` (currently 1 min).

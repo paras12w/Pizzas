@@ -3,6 +3,7 @@ import { discoverTrendingTickers, fetchTickerMentions } from "@/lib/reddit";
 import { fetchManySnapshots } from "@/lib/yahoo";
 import { scoreTicker, rankTop9 } from "@/lib/scoring";
 import { getAlerts, isPersistent } from "@/lib/store";
+import { runBot } from "@/lib/bot";
 
 export const dynamic = "force-dynamic"; // never statically cache this route
 
@@ -52,11 +53,13 @@ export async function GET() {
       .filter((s) => s.sources.yahoo || s.sources.discord);
 
     const top9 = rankTop9(scored);
+    const bot = await runBot(scored);
 
     return NextResponse.json({
       updatedAt: new Date().toISOString(),
       persistent: isPersistent(),
       board: top9,
+      bot,
     });
   } catch (err) {
     console.error("[api/scores] failed:", err);
