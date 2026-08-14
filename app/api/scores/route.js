@@ -14,10 +14,13 @@ export async function GET() {
       getAlerts(),
     ]);
 
-    // Take the top ~20 reddit candidates by weighted mentions, then make sure
+    // Take the top ~15 reddit candidates by weighted mentions, then make sure
     // every ticker with a live Discord alert is included even if Reddit hasn't
-    // picked it up yet.
-    const topReddit = redditCandidates.slice(0, 20);
+    // picked it up yet. Kept modest (rather than 20+) because the client now
+    // polls every 15s — each candidate costs 2 Yahoo requests (quote +
+    // options), and a smaller, tighter pool keeps that well under Yahoo's
+    // informal rate limits.
+    const topReddit = redditCandidates.slice(0, 15);
     const redditTickerSet = new Set(topReddit.map((r) => r.ticker));
 
     const alertOnlyTickers = alerts
@@ -43,7 +46,7 @@ export async function GET() {
     // Reddit refused this request.
     let allTickers = [...redditEntryByTicker.keys()];
     if (allTickers.length < 9) {
-      const movers = await fetchMarketMovers();
+      const movers = await fetchMarketMovers(15);
       const existing = new Set(allTickers);
       for (const ticker of movers) {
         if (!existing.has(ticker)) {
@@ -52,6 +55,7 @@ export async function GET() {
         }
       }
     }
+    allTickers = allTickers.slice(0, 20);
 
     const maxWeightedScore = Math.max(
       ...[...redditEntryByTicker.values()].map((c) => c.weightedScore || 0),
