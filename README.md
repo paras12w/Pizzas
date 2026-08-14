@@ -125,11 +125,17 @@ below) — both are optional and independent of each other.
 3. **(Recommended)** For alerts, bot positions, watchlist, notification
    settings, and calibrated weights to persist across requests instead of
    resetting on cold starts: in your Vercel project → **Storage** tab →
-   **Create Database** → **KV**. Connect it to this project when prompted,
+   **Browse Storage**. The standalone "KV" product is retired, so instead
+   pick **Upstash** under "Marketplace Database Providers" (not Neon —
+   that's Postgres, the wrong kind of database for this) and create a
+   **Redis** database through it. Connect it to this project when prompted,
    then redeploy (Deployments tab → ⋯ on the latest deployment → Redeploy).
-   Vercel auto-populates `KV_REST_API_URL` and `KV_REST_API_TOKEN` for you —
-   no manual copying needed. The "storage isn't persistent" banner on the
-   board goes away once this is done and the app redeploys.
+   Check **Settings → Environment Variables** afterward — this app accepts
+   either `KV_REST_API_URL`/`KV_REST_API_TOKEN` or
+   `UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN`, whichever the
+   integration named them, so it should pick them up automatically either
+   way. The "storage isn't persistent" banner on the board goes away once
+   this is done and the app redeploys.
 4. **(Optional)** For Discord push notifications when a bot opens/closes a
    position: create a webhook on a Discord channel (Channel Settings →
    Integrations → Webhooks) and set `DISCORD_WEBHOOK_URL` in your Vercel
