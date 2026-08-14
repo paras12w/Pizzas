@@ -12,6 +12,8 @@ import {
   getPrevBoard,
   savePrevBoard,
   getNotificationSettings,
+  getTrackedTickers,
+  saveTrackedTickers,
 } from "@/lib/store";
 import { runBot, BOT_CONFIGS } from "@/lib/bot";
 import { shouldRecalibrate, recalibrateWeights } from "@/lib/calibration";
@@ -19,6 +21,9 @@ import { notifyDiscord } from "@/lib/discord-notify";
 import { sendNotificationEmail } from "@/lib/email-notify";
 
 export const dynamic = "force-dynamic"; // never statically cache this route
+
+const TICKER_CAP = 22;
+const TRACKED_RETENTION_MS = 3 * 60 * 1000; // keep a recently-seen candidate in the pool for 3 minutes
 
 function attachTrend(entry, prevBoard, listKey) {
   const prevConfidence = prevBoard?.scores?.[entry.ticker];
@@ -40,24 +45,23 @@ function attachTrend(entry, prevBoard, listKey) {
 
 export async function GET() {
   try {
-    const [redditCandidates, alerts, storedWeights, prevBoard, notifSettings] = await Promise.all([
+    const [redditCandidates, alerts, storedWeights, prevBoard, notifSettings, tracked] = await Promise.all([
       discoverTrendingTickers(),
       getAlerts(),
       getWeights(),
       getPrevBoard(),
       getNotificationSettings(),
+      getTrackedTickers(),
     ]);
     const weights = mergeWeights(storedWeights);
 
     // Take the top ~11 reddit candidates by weighted mentions, then make sure
     // every ticker with a live Discord alert is included even if Reddit hasn't
-    // picked it up yet. Kept modest (rather than 20+) both because the client
-    // polls every 15s (each candidate costs 2 Yahoo requests) and — deliberately
-    // capped so that even in the worst case, the 20-ticker pool below always
-    // has a full 9 slots left for Yahoo's day_losers movers, which is what
-    // actually fills the Sell list. Reddit's own content skews bullish, so
-    // giving it more room than that starves Sell candidates no matter how the
-    // merge is ordered.
+    // picked it up yet. Kept modest both because the client polls every 15s
+    // (each candidate costs 2 Yahoo requests) and to leave room below for
+    // movers and tracked tickers — Reddit's own content skews bullish, so
+    // giving it the whole pool starves the Sell side regardless of anything
+    // else done downstream.
     const topReddit = redditCandidates.slice(0, 11);
     const redditTickerSet = new Set(topReddit.map((r) => r.ticker));
 
@@ -77,24 +81,42 @@ export async function GET() {
       [...topReddit, ...backfilled].map((c) => [c.ticker, c])
     );
 
-    // Always blend in Yahoo's own live movers (actives + gainers + losers),
-    // not just when Reddit comes up short. Two independent reasons: Reddit's
-    // public JSON endpoints frequently block cloud/serverless IPs outright
-    // (Vercel included) regardless of User-Agent, and — separately — Reddit's
-    // own content skews bullish (moon/rocket posts vastly outnumber short
-    // theses), so relying on Reddit alone starves the Sell list even on
-    // cycles where Reddit works fine. Reddit-sourced tickers stay first in
-    // line since they're pushed into the array before movers are merged in.
     let allTickers = [...redditEntryByTicker.keys()];
-    const movers = await fetchMarketMovers(15);
-    const existing = new Set(allTickers);
-    for (const ticker of movers) {
-      if (!existing.has(ticker)) {
-        existing.add(ticker);
+    const seen = new Set(allTickers);
+    function addUpTo(candidates, budget) {
+      let added = 0;
+      for (const ticker of candidates) {
+        if (added >= budget) break;
+        if (seen.has(ticker)) continue;
+        seen.add(ticker);
         allTickers.push(ticker);
+        added++;
       }
     }
-    allTickers = allTickers.slice(0, 20);
+
+    // Recently-seen tickers (discovered on a previous cycle, still within the
+    // retention window) get folded back in next, ahead of fresh movers —
+    // this is what actually keeps both lists near-full cycle to cycle: a
+    // rough discovery cycle for one direction doesn't visibly shrink that
+    // list, since it's smoothed over the retention window instead of
+    // whiplashing every 15 seconds. Always re-scored with live data below,
+    // never frozen — this only carries the ticker symbol forward, not a
+    // stale score.
+    const now = Date.now();
+    const recentlyTracked = Object.entries(tracked)
+      .filter(([, lastSeenAt]) => now - lastSeenAt < TRACKED_RETENTION_MS)
+      .sort((a, b) => b[1] - a[1])
+      .map(([ticker]) => ticker);
+    addUpTo(recentlyTracked, Math.max(0, TICKER_CAP - allTickers.length));
+
+    // Yahoo's own live movers fill whatever's left, split explicitly between
+    // directions instead of one flat priority list — an earlier version let
+    // day_losers claim the whole remaining budget first, which fixed the
+    // Sell list but then starved Buy of gainers entirely.
+    const movers = await fetchMarketMovers(15);
+    const moverBudget = Math.max(0, TICKER_CAP - allTickers.length);
+    addUpTo(movers.losers, Math.ceil(moverBudget / 2));
+    addUpTo([...movers.actives, ...movers.gainers], Math.max(0, TICKER_CAP - allTickers.length));
 
     const maxWeightedScore = Math.max(
       ...[...redditEntryByTicker.values()].map((c) => c.weightedScore || 0),
@@ -169,6 +191,13 @@ export async function GET() {
         }
       }
     }
+
+    // Refresh the tracked-ticker pool: anything that actually resolved this
+    // cycle stays candidate-eligible for the retention window even if not
+    // freshly rediscovered next cycle. See lib/store.js for why.
+    const nextTracked = { ...tracked };
+    for (const s of scored) nextTracked[s.ticker] = now;
+    await saveTrackedTickers(nextTracked);
 
     await savePrevBoard({
       scores: Object.fromEntries(scored.map((s) => [s.ticker, s.confidence])),
