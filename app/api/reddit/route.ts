@@ -124,7 +124,7 @@ export async function GET(req: NextRequest) {
           credibilityScore: score,
           breakdown,
         };
-        addAlert(alert);
+        await addAlert(alert);
       }
     }
 

@@ -8,7 +8,7 @@ import { getQuote } from "./yahoo";
  * and logs a simulated position sized by confidence tier.
  */
 export async function maybeExecuteTrade(alert: Alert): Promise<Trade | null> {
-  const portfolio = getPortfolio();
+  const portfolio = await getPortfolio();
   const positionSize = sizePosition(alert.credibilityScore, portfolio.cashBalance);
   if (positionSize <= 0) return null;
   if (positionSize > portfolio.cashBalance) return null; // out of cash, skip
@@ -42,7 +42,7 @@ export async function maybeExecuteTrade(alert: Alert): Promise<Trade | null> {
     reasoning: buildReasoning(alert),
   };
 
-  addTrade(trade);
+  await addTrade(trade);
   return trade;
 }
 

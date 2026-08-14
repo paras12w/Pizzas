@@ -3,7 +3,7 @@ import { getPortfolio, closeTrade } from "@/lib/store";
 import { getQuote } from "@/lib/yahoo";
 
 export async function GET() {
-  const portfolio = getPortfolio();
+  const portfolio = await getPortfolio();
 
   const totalPnl = portfolio.trades
     .filter((t) => t.status === "closed")
@@ -34,13 +34,13 @@ export async function POST(req: NextRequest) {
 
   let price = exitPrice;
   if (!price) {
-    const portfolio = getPortfolio();
+    const portfolio = await getPortfolio();
     const trade = portfolio.trades.find((t) => t.id === tradeId);
     if (!trade) return NextResponse.json({ error: "trade not found" }, { status: 404 });
     const quote = await getQuote(trade.ticker);
     price = quote.price;
   }
 
-  closeTrade(tradeId, price);
+  await closeTrade(tradeId, price);
   return NextResponse.json({ ok: true });
 }

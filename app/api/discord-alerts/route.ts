@@ -5,7 +5,8 @@ import { Alert, Direction } from "@/lib/types";
 import { maybeExecuteTrade } from "@/lib/paperTrade";
 
 export async function GET() {
-  return NextResponse.json(getAlerts().filter((a) => a.source === "discord"));
+  const alerts = await getAlerts();
+  return NextResponse.json(alerts.filter((a) => a.source === "discord"));
 }
 
 export async function POST(req: NextRequest) {
@@ -24,7 +25,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "serverId, ticker, and direction are required" }, { status: 400 });
   }
 
-  const server = getServers().find((s) => s.id === serverId);
+  const servers = await getServers();
+  const server = servers.find((s) => s.id === serverId);
   if (!server) {
     return NextResponse.json({ error: "unknown serverId" }, { status: 400 });
   }
@@ -46,7 +48,7 @@ export async function POST(req: NextRequest) {
     breakdown,
   };
 
-  addAlert(alert);
+  await addAlert(alert);
 
   // Instant-log behavior: since this is your highest-trust source, the bot
   // evaluates immediately and takes the trade if it clears the threshold.
