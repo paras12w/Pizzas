@@ -49,14 +49,16 @@ export async function GET() {
     ]);
     const weights = mergeWeights(storedWeights);
 
-    // Take the top ~12 reddit candidates by weighted mentions, then make sure
+    // Take the top ~11 reddit candidates by weighted mentions, then make sure
     // every ticker with a live Discord alert is included even if Reddit hasn't
     // picked it up yet. Kept modest (rather than 20+) both because the client
-    // polls every 15s (each candidate costs 2 Yahoo requests) and to reliably
-    // leave room in the merged pool below for Yahoo's day_losers movers,
-    // which is what actually fills the Sell list — Reddit's own content
-    // skews bullish, so giving it the whole pool starves Sell candidates.
-    const topReddit = redditCandidates.slice(0, 12);
+    // polls every 15s (each candidate costs 2 Yahoo requests) and — deliberately
+    // capped so that even in the worst case, the 20-ticker pool below always
+    // has a full 9 slots left for Yahoo's day_losers movers, which is what
+    // actually fills the Sell list. Reddit's own content skews bullish, so
+    // giving it more room than that starves Sell candidates no matter how the
+    // merge is ordered.
+    const topReddit = redditCandidates.slice(0, 11);
     const redditTickerSet = new Set(topReddit.map((r) => r.ticker));
 
     const alertOnlyTickers = alerts
