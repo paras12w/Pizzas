@@ -49,13 +49,14 @@ export async function GET() {
     ]);
     const weights = mergeWeights(storedWeights);
 
-    // Take the top ~15 reddit candidates by weighted mentions, then make sure
+    // Take the top ~12 reddit candidates by weighted mentions, then make sure
     // every ticker with a live Discord alert is included even if Reddit hasn't
-    // picked it up yet. Kept modest (rather than 20+) because the client now
-    // polls every 15s — each candidate costs 2 Yahoo requests (quote +
-    // options), and a smaller, tighter pool keeps that well under Yahoo's
-    // informal rate limits.
-    const topReddit = redditCandidates.slice(0, 15);
+    // picked it up yet. Kept modest (rather than 20+) both because the client
+    // polls every 15s (each candidate costs 2 Yahoo requests) and to reliably
+    // leave room in the merged pool below for Yahoo's day_losers movers,
+    // which is what actually fills the Sell list — Reddit's own content
+    // skews bullish, so giving it the whole pool starves Sell candidates.
+    const topReddit = redditCandidates.slice(0, 12);
     const redditTickerSet = new Set(topReddit.map((r) => r.ticker));
 
     const alertOnlyTickers = alerts
@@ -74,20 +75,21 @@ export async function GET() {
       [...topReddit, ...backfilled].map((c) => [c.ticker, c])
     );
 
-    // Reddit's public JSON endpoints frequently block cloud/serverless IPs
-    // outright (Vercel included), independent of User-Agent, which can leave
-    // redditEntryByTicker empty on a given deploy. When that happens, backfill
-    // with Yahoo's own live movers so the board is never empty just because
-    // Reddit refused this request.
+    // Always blend in Yahoo's own live movers (actives + gainers + losers),
+    // not just when Reddit comes up short. Two independent reasons: Reddit's
+    // public JSON endpoints frequently block cloud/serverless IPs outright
+    // (Vercel included) regardless of User-Agent, and — separately — Reddit's
+    // own content skews bullish (moon/rocket posts vastly outnumber short
+    // theses), so relying on Reddit alone starves the Sell list even on
+    // cycles where Reddit works fine. Reddit-sourced tickers stay first in
+    // line since they're pushed into the array before movers are merged in.
     let allTickers = [...redditEntryByTicker.keys()];
-    if (allTickers.length < 9) {
-      const movers = await fetchMarketMovers(15);
-      const existing = new Set(allTickers);
-      for (const ticker of movers) {
-        if (!existing.has(ticker)) {
-          existing.add(ticker);
-          allTickers.push(ticker);
-        }
+    const movers = await fetchMarketMovers(15);
+    const existing = new Set(allTickers);
+    for (const ticker of movers) {
+      if (!existing.has(ticker)) {
+        existing.add(ticker);
+        allTickers.push(ticker);
       }
     }
     allTickers = allTickers.slice(0, 20);
