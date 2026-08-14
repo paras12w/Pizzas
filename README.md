@@ -4,70 +4,110 @@ Public, non-interactive live scoreboard: ranks the top 9 trade candidates right
 now by scanning Reddit, Yahoo Finance, and any Discord alerts you log — no
 account, no login, no manual running required once it's deployed.
 
+## Pages
+
+- **Board** (`/`) — the live top-9 leaderboard, Discord alert form, and Bot
+  A's open positions + trade history.
+- **Performance** (`/performance`) — equity curve, win rate, and P&L stats
+  for both bots, reconstructed from their full closed-trade history.
+- **Alert Log** (`/alerts`) — every Discord alert ever submitted, not just
+  the ones still live-scoring.
+- **Weights** (`/weights`) — the scoring formula's current weights vs. their
+  defaults, and a log of every automatic recalibration.
+- **Watchlist** (`/watchlist`) — pin tickers to always track their score
+  even when they don't crack the organic top 9.
+- **Bot B** (`/bot-b`) — the experimental bot variant, kept off the main
+  board on purpose (see below).
+
 ## How it works
 
 - **`GET /api/scores`** does the actual work on every call:
   1. Pulls hot posts from r/wallstreetbets, r/stocks, r/options, r/StockMarket
      via Reddit's public JSON endpoints (`reddit.com/r/<sub>/hot.json`) — **no
      Reddit developer app / OAuth needed**, just a descriptive User-Agent.
+     Falls back to Yahoo's own live "most active" / "day gainers" movers if
+     Reddit doesn't yield enough candidates (it blocks a lot of cloud IPs
+     outright, Vercel's included).
   2. Extracts `$TICKER` cashtags (high confidence) and bare all-caps words
      (lower confidence, stopword-filtered) from post titles/bodies, weighted
-     by upvotes + comments.
-  3. Pulls live price, % change, and volume from Yahoo Finance
-     (`yahoo-finance2`, also free, no key) for every candidate, plus a
+     by upvotes + comments, plus a cheap keyword-density **sentiment** read
+     (bullish vs. bearish language) per ticker.
+  3. Pulls live price, % change, volume, and today's high/low from Yahoo
+     Finance (`yahoo-finance2`, free, no key) for every candidate, plus a
      best-effort read of the nearest options chain for IV / put-call skew.
   4. Folds in any Discord alerts you've logged (see below).
   5. Scores each candidate on two 0–100 axes — **Confidence** (how much the
      signals agree the bot would take this trade) and **Benefit** (how
-     favorable the setup looks if taken) — and returns the **top 9 by
-     blended overall score, always** — even on a slow day where nothing
-     clears the take threshold, the board still shows the 9 best of what's
-     out there, ranked. A ticker is marked **Taken** once Confidence
-     crosses 72.
-  6. Runs the paper-trading bot (`lib/bot.js`) against those same scores:
-     opens a simulated position the moment a ticker crosses the Taken
-     threshold, tracks its unrealized P&L against live price on every
-     refresh, and closes it when confidence decays, the ticker falls off
-     the board, or it's been held 6+ hours. Positions persist in the same
-     store as Discord alerts.
-- The page (`app/page.js`) polls that route every minute and re-renders.
-  Click any ticker on the leaderboard to open its detail view: an intraday
-  price chart plus a plain-English breakdown of exactly which signals (and
-  how many points each) produced its Confidence and Benefit scores, along
-  with the bot's position on that ticker if it has one.
+     favorable the setup looks if taken) — via continuous curves (not
+     stepped bonuses), so small signal differences produce small score
+     differences instead of clustering candidates onto round numbers.
+     Returns the **top 9 by blended overall score, always** — even on a slow
+     day, the board shows the 9 best of what's out there, ranked.
+  6. Runs **two** paper-trading bots (`lib/bot.js`) against those scores,
+     each starting from a simulated **$10,000** cash balance:
+     - **Bot A** (featured, shown on the main board): standard threshold
+       (72), conservative sizing (5%–20% of current bankroll based on
+       confidence strength), 6h max hold.
+     - **Bot B** (`/bot-b`, kept separate): looser entry threshold (60),
+       more aggressive sizing (3%–30%), tighter 3h leash. It's the "B" side
+       of an A/B test — not a claim it's better, that's what Performance is
+       for.
+     Both size positions by confidence (stronger entries get bigger size),
+     track mark-to-market equity every refresh, and close on confidence
+     decay, falling off the board, or max hold. If `DISCORD_WEBHOOK_URL` is
+     set, every open/close posts to that webhook (`lib/discord-notify.js`).
+  7. **Weight calibration** (`lib/calibration.js`): once Bot A has 15+ closed
+     trades, correlates each scoring component's entry-time contribution
+     against actual P&L and nudges the live weights (capped ±15% per pass,
+     renormalized) — components that predicted winners get weighted up,
+     noise gets weighted down. Runs again every 10 new trades. See `/weights`
+     for the live formula and a full history of what changed and why.
+- The board page polls `/api/scores` every 15 seconds. Click any ticker to
+  open its detail view: an intraday price chart plus a plain-English
+  breakdown of exactly which signals (and how many points each) produced its
+  Confidence and Benefit scores, along with Bot A's position on it if any.
 
 **Important nuance on "standalone":** the scoring only runs when
 `/api/scores` is hit. With just client polling, that means it only
 recomputes while someone has the page open. That's normal and fine for a
 public dashboard. If you want it to keep updating even with zero visitors
-(e.g. so the bot keeps managing open positions unattended), you'd add a
+(e.g. so the bots keep managing open positions unattended), you'd add a
 scheduled job — Vercel's free Hobby plan caps its built-in Cron to once a
-day, so once-a-day is fine for free; for anything more frequent (like
-matching the 1-minute client refresh) you'd either upgrade to Vercel Pro or
-use a free external pinger (e.g. cron-job.org) hitting your `/api/scores`
-URL every minute.
+day; for anything more frequent you'd either upgrade to Vercel Pro or use a
+free external pinger (e.g. cron-job.org) hitting `/api/scores`.
+
+**On polling speed:** 15s is fast enough that each candidate's 2 Yahoo
+requests (quote + options) add up quickly — the candidate pool is
+deliberately capped (20 tickers) to stay under Yahoo's informal rate
+limits. If you see "ERROR" flashes on the board, that's the most likely
+cause; back off `REFRESH_MS` in `app/page.js` first.
 
 ## The one input: logging a Discord alert
 
-Open "Log a Discord Alert" on the page and paste the alert text as-is, e.g.:
+Open "Log a Discord Alert" on the board and paste the alert text as-is, e.g.:
 
 ```
 BUY QQQ 450C 8/15 @ 2.10 — momentum off open
 ```
 
 It extracts the ticker and bullish/bearish direction automatically and folds
-it into that ticker's score (with a confidence + benefit boost) on the next
-refresh. No structured form fields required.
+it into that ticker's score on the next refresh, and is permanently recorded
+in the Alert Log. No structured form fields required.
 
 ## Deploying
 
 1. Push this folder to a new GitHub repo.
 2. Import it into Vercel (vercel.com → New Project → your repo). No env
    vars are required for the site to work.
-3. **(Recommended)** For Discord alerts to persist across requests instead
-   of resetting on cold starts: in your Vercel project → Storage → Create
-   → KV. Once created, Vercel auto-populates `KV_REST_API_URL` and
-   `KV_REST_API_TOKEN` for you — no manual copying needed, just redeploy.
+3. **(Recommended)** For alerts, bot positions, watchlist, and calibrated
+   weights to persist across requests instead of resetting on cold starts:
+   in your Vercel project → Storage → Create → KV. Once created, Vercel
+   auto-populates `KV_REST_API_URL` and `KV_REST_API_TOKEN` for you — no
+   manual copying needed, just redeploy.
+4. **(Optional)** For Discord push notifications when a bot opens/closes a
+   position: create a webhook on a Discord channel (Channel Settings →
+   Integrations → Webhooks) and set `DISCORD_WEBHOOK_URL` in your Vercel
+   project's env vars to that URL.
 
 ## Local development
 
@@ -81,10 +121,13 @@ in dev, so you'll see live data locally too.
 
 ## Tuning
 
-- **Watchlist / subreddits scanned:** `lib/reddit.js` → `SUBREDDITS`
-- **Scoring weights:** `lib/scoring.js` — confidence and benefit are each
-  built from a weighted sum of signals; adjust the multipliers there.
-- **Take threshold:** `TAKE_THRESHOLD` in `lib/scoring.js` (currently 72).
-- **Bot exit rules:** `EXIT_THRESHOLD` (confidence decay) and `MAX_HOLD_MS`
-  (time-based exit) in `lib/bot.js`.
-- **Refresh interval:** `REFRESH_MS` in `app/page.js` (currently 1 min).
+- **Subreddits scanned:** `lib/reddit.js` → `SUBREDDITS`
+- **Sentiment keyword lists:** `lib/reddit.js` → `BULLISH_WORDS` / `BEARISH_WORDS`
+- **Scoring weights:** `lib/scoring.js` → `DEFAULT_WEIGHTS` (the live,
+  possibly-calibrated weights are visible on `/weights`)
+- **Take threshold:** `TAKE_THRESHOLD` in `lib/scoring.js` (currently 72,
+  used for the board's "Taken" badge and Bot A's default)
+- **Bot configs (threshold, exit, sizing, max hold):** `BOT_CONFIGS` in `lib/bot.js`
+- **Calibration sensitivity:** `MIN_SAMPLE`, `RECALIBRATION_STEP`, `NUDGE_CAP`
+  in `lib/calibration.js`
+- **Refresh interval:** `REFRESH_MS` in `app/page.js` (currently 15s)
