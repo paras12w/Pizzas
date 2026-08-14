@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { TAKE_THRESHOLD } from "@/lib/scoring";
 
-const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
+const REFRESH_MS = 60 * 1000; // 1 minute
 
 function timeAgo(iso) {
   if (!iso) return "—";
@@ -12,6 +12,18 @@ function timeAgo(iso) {
   const mins = Math.floor(secs / 60);
   if (mins < 60) return `${mins}m ago`;
   return `${Math.floor(mins / 60)}h ago`;
+}
+
+function formatDuration(ms) {
+  const mins = Math.floor(ms / 60000);
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  return `${hrs}h ${mins % 60}m`;
+}
+
+function formatPct(n) {
+  if (n == null) return "—";
+  return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 }
 
 function Meter({ value, tone }) {
@@ -26,11 +38,193 @@ function Meter({ value, tone }) {
   );
 }
 
-function BoardRow({ entry }) {
+function ReasonList({ title, reasons }) {
+  if (!reasons?.length) {
+    return (
+      <div>
+        <div className="text-[10px] uppercase tracking-widest text-[var(--ink-dim)] mb-1">{title}</div>
+        <div className="text-xs text-[var(--ink-dim)] font-mono-board">No strong contributing signals.</div>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-widest text-[var(--ink-dim)] mb-1">{title}</div>
+      <ul className="space-y-1">
+        {reasons.map((r) => (
+          <li key={r.label} className="flex items-center justify-between gap-3 text-xs">
+            <span className="text-[var(--ink)]">{r.label}</span>
+            <span className="font-mono-board text-[var(--ink-dim)] whitespace-nowrap">
+              {r.detail} · <span style={{ color: "var(--amber)" }}>+{r.points}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function Sparkline({ candles }) {
+  if (!candles?.length) {
+    return (
+      <div className="flex h-32 items-center justify-center text-xs text-[var(--ink-dim)] font-mono-board">
+        No chart data available.
+      </div>
+    );
+  }
+
+  const w = 600;
+  const h = 128;
+  const closes = candles.map((c) => c.close);
+  const min = Math.min(...closes);
+  const max = Math.max(...closes);
+  const range = max - min || 1;
+
+  const points = candles.map((c, i) => {
+    const x = (i / Math.max(1, candles.length - 1)) * w;
+    const y = h - ((c.close - min) / range) * h;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+
+  const rising = closes[closes.length - 1] >= closes[0];
+  const lineColor = rising ? "var(--bull)" : "var(--bear)";
+
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-32" preserveAspectRatio="none">
+      <polyline points={points.join(" ")} fill="none" stroke={lineColor} strokeWidth="2" />
+    </svg>
+  );
+}
+
+function TickerDetail({ ticker, entry, botPosition, onClose }) {
+  const [history, setHistory] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    fetch(`/api/history?ticker=${encodeURIComponent(ticker)}`, { cache: "no-store" })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return;
+        if (data.error) throw new Error(data.error);
+        setHistory(data);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ticker]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 px-3 py-8 sm:px-6" onClick={onClose}>
+      <div
+        className="w-full max-w-2xl rounded-md border border-[var(--hairline)] bg-[var(--panel)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-[var(--hairline)] px-4 py-3">
+          <div>
+            <div className="font-mono-board text-xl font-bold" style={{ color: "var(--amber)" }}>
+              {ticker}
+            </div>
+            {entry?.price != null && (
+              <div className="font-mono-board text-xs text-[var(--ink-dim)]">
+                ${entry.price.toFixed(2)}{" "}
+                <span style={{ color: entry.changePercent >= 0 ? "var(--bull)" : "var(--bear)" }}>
+                  {formatPct(entry.changePercent)}
+                </span>
+              </div>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-sm border border-[var(--hairline)] px-2 py-1 text-xs text-[var(--ink-dim)] hover:text-[var(--amber)]"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="px-4 py-4">
+          {loading && <div className="py-8 text-center text-xs text-[var(--ink-dim)] font-mono-board">Loading chart…</div>}
+          {error && <div className="py-4 text-center text-xs text-[var(--bear)] font-mono-board">{error}</div>}
+          {!loading && !error && <Sparkline candles={history?.candles} />}
+        </div>
+
+        {entry && (
+          <div className="grid grid-cols-1 gap-4 border-t border-[var(--hairline)] px-4 py-4 sm:grid-cols-2">
+            <div>
+              <div className="flex justify-between text-[10px] uppercase tracking-widest text-[var(--ink-dim)] mb-1">
+                <span>Confidence</span>
+                <span className="font-mono-board text-[var(--ink)]">{entry.confidence}</span>
+              </div>
+              <Meter value={entry.confidence} tone="amber" />
+              <div className="mt-3">
+                <ReasonList title="Why this confidence score" reasons={entry.reasons?.confidence} />
+              </div>
+            </div>
+            <div>
+              <div className="flex justify-between text-[10px] uppercase tracking-widest text-[var(--ink-dim)] mb-1">
+                <span>Benefit</span>
+                <span className="font-mono-board text-[var(--ink)]">{entry.benefit}</span>
+              </div>
+              <Meter value={entry.benefit} tone={entry.direction === "bearish" ? "bear" : "bull"} />
+              <div className="mt-3">
+                <ReasonList title="Why this benefit score" reasons={entry.reasons?.benefit} />
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="border-t border-[var(--hairline)] px-4 py-4">
+          <div className="text-[10px] uppercase tracking-widest text-[var(--ink-dim)] mb-2">Trading bot</div>
+          {botPosition ? (
+            <div className="font-mono-board text-xs text-[var(--ink)]">
+              {botPosition.status === "open" ? (
+                <>
+                  <span className="text-[var(--amber)]">Open position</span> · entered ${botPosition.entryPrice?.toFixed(2)} ·
+                  {" "}
+                  <span style={{ color: botPosition.unrealizedPercent >= 0 ? "var(--bull)" : "var(--bear)" }}>
+                    {formatPct(botPosition.unrealizedPercent)} unrealized
+                  </span>{" "}
+                  · held {formatDuration(Date.now() - botPosition.openedAt)}
+                </>
+              ) : (
+                <>
+                  <span className="text-[var(--ink-dim)]">Closed</span> · entered ${botPosition.entryPrice?.toFixed(2)}, exited $
+                  {botPosition.exitPrice?.toFixed(2)} ·{" "}
+                  <span style={{ color: botPosition.pnlPercent >= 0 ? "var(--bull)" : "var(--bear)" }}>
+                    {formatPct(botPosition.pnlPercent)}
+                  </span>{" "}
+                  · {botPosition.exitReason}
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="text-xs text-[var(--ink-dim)] font-mono-board">
+              No bot position on this ticker — confidence hasn&apos;t crossed {TAKE_THRESHOLD} yet.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BoardRow({ entry, onSelect }) {
   const dirColor = entry.direction === "bearish" ? "var(--bear)" : "var(--bull)";
   const chg = entry.changePercent;
   return (
-    <div className="flip-in grid grid-cols-[3rem_5rem_1fr_1fr_5.5rem_4rem] items-center gap-3 sm:gap-4 border-b border-[var(--hairline)] px-3 sm:px-4 py-3">
+    <button
+      onClick={() => onSelect(entry.ticker)}
+      className="flip-in grid w-full grid-cols-[3rem_5rem_1fr_1fr_5.5rem_4rem] items-center gap-3 sm:gap-4 border-b border-[var(--hairline)] px-3 sm:px-4 py-3 text-left transition-colors hover:bg-[var(--panel-2)]"
+    >
       <div className="font-mono-board text-2xl font-bold" style={{ color: "var(--amber)" }}>
         {String(entry.rank).padStart(2, "0")}
       </div>
@@ -83,17 +277,75 @@ function BoardRow({ entry }) {
         <span title="Yahoo Finance" className={entry.sources.yahoo ? "text-[var(--amber)]" : "opacity-25"}>Y</span>
         <span title="Discord alert" className={entry.sources.discord ? "text-[var(--amber)]" : "opacity-25"}>D</span>
       </div>
-    </div>
+    </button>
+  );
+}
+
+function BotPanel({ bot }) {
+  const open = bot?.open || [];
+  const closed = bot?.closed || [];
+
+  return (
+    <section className="mt-10 rounded-md border border-[var(--hairline)] bg-[var(--panel)]">
+      <div className="border-b border-[var(--hairline)] px-4 py-3 text-xs uppercase tracking-widest text-[var(--ink-dim)]">
+        Paper-Trading Bot
+      </div>
+
+      <div className="px-4 py-4">
+        <div className="mb-2 text-[10px] uppercase tracking-widest text-[var(--ink-dim)]">
+          Open positions ({open.length})
+        </div>
+        {open.length === 0 ? (
+          <div className="text-xs text-[var(--ink-dim)] font-mono-board">No open positions right now.</div>
+        ) : (
+          <div className="space-y-2">
+            {open.map((p) => (
+              <div key={p.ticker} className="flex items-center justify-between font-mono-board text-xs">
+                <span className="font-bold" style={{ color: "var(--amber)" }}>{p.ticker}</span>
+                <span className="text-[var(--ink-dim)]">{p.direction}</span>
+                <span className="text-[var(--ink-dim)]">${p.entryPrice?.toFixed(2)} → ${p.lastPrice?.toFixed(2)}</span>
+                <span style={{ color: p.unrealizedPercent >= 0 ? "var(--bull)" : "var(--bear)" }}>
+                  {formatPct(p.unrealizedPercent)}
+                </span>
+                <span className="text-[var(--ink-dim)]">{formatDuration(Date.now() - p.openedAt)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {closed.length > 0 && (
+        <div className="border-t border-[var(--hairline)] px-4 py-4">
+          <div className="mb-2 text-[10px] uppercase tracking-widest text-[var(--ink-dim)]">
+            Recent closed trades
+          </div>
+          <div className="space-y-2">
+            {closed.slice(0, 8).map((p) => (
+              <div key={`${p.ticker}-${p.closedAt}`} className="flex items-center justify-between font-mono-board text-xs">
+                <span className="font-bold text-[var(--ink)]">{p.ticker}</span>
+                <span className="text-[var(--ink-dim)]">{p.direction}</span>
+                <span style={{ color: p.pnlPercent >= 0 ? "var(--bull)" : "var(--bear)" }}>
+                  {formatPct(p.pnlPercent)}
+                </span>
+                <span className="text-[var(--ink-dim)]">{p.exitReason}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
 export default function Page() {
   const [board, setBoard] = useState([]);
+  const [bot, setBot] = useState(null);
   const [updatedAt, setUpdatedAt] = useState(null);
   const [persistent, setPersistent] = useState(true);
   const [status, setStatus] = useState("loading"); // loading | ok | error
   const [errorMsg, setErrorMsg] = useState("");
   const [, setNowTick] = useState(Date.now());
+  const [selectedTicker, setSelectedTicker] = useState(null);
 
   const [alertText, setAlertText] = useState("");
   const [alertPanelOpen, setAlertPanelOpen] = useState(false);
@@ -108,6 +360,7 @@ export default function Page() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to load board");
       setBoard(data.board || []);
+      setBot(data.bot || null);
       setUpdatedAt(data.updatedAt);
       setPersistent(data.persistent);
       setStatus("ok");
@@ -150,6 +403,13 @@ export default function Page() {
     }
   }
 
+  const selectedEntry = board.find((b) => b.ticker === selectedTicker) || null;
+  const selectedBotPosition = selectedTicker
+    ? (bot?.open || []).map((p) => ({ ...p, status: "open" })).find((p) => p.ticker === selectedTicker) ||
+      (bot?.closed || []).map((p) => ({ ...p, status: "closed" })).find((p) => p.ticker === selectedTicker) ||
+      null
+    : null;
+
   return (
     <main className="mx-auto max-w-4xl px-3 sm:px-6 py-8 sm:py-12">
       <header className="mb-8 flex items-end justify-between border-b border-[var(--hairline)] pb-4">
@@ -178,7 +438,7 @@ export default function Page() {
 
       {!persistent && status === "ok" && (
         <div className="mb-6 rounded-sm border border-[var(--amber)]/30 bg-[var(--amber)]/5 px-4 py-3 text-xs text-[var(--ink-dim)]">
-          Discord alert storage isn&apos;t persistent yet — set up Vercel KV (see README) so alerts survive server restarts.
+          Discord alert storage isn&apos;t persistent yet — set up Vercel KV (see README) so alerts and bot positions survive server restarts.
         </div>
       )}
 
@@ -200,18 +460,22 @@ export default function Page() {
 
         {status === "ok" && board.length === 0 && (
           <div className="px-4 py-10 text-center text-sm text-[var(--ink-dim)] font-mono-board">
-            No qualifying tickers this cycle. Board refreshes automatically.
+            No candidates found this cycle. Board refreshes automatically.
           </div>
         )}
 
         {board.map((entry) => (
-          <BoardRow key={entry.ticker} entry={entry} />
+          <BoardRow key={entry.ticker} entry={entry} onSelect={setSelectedTicker} />
         ))}
       </section>
 
       <p className="mt-3 text-[11px] text-[var(--ink-dim)] font-mono-board">
-        Bot marks a trade &ldquo;Taken&rdquo; once confidence crosses {TAKE_THRESHOLD}. Board refreshes every 5 minutes.
+        Board always shows the current top 9 candidates, ranked best-to-worst — even on a slow day. Bot opens a
+        paper position once confidence crosses {TAKE_THRESHOLD}. Click a ticker for its chart and score breakdown.
+        Refreshes every minute.
       </p>
+
+      <BotPanel bot={bot} />
 
       <section className="mt-10 rounded-md border border-[var(--hairline)] bg-[var(--panel)]">
         <button
@@ -248,6 +512,15 @@ export default function Page() {
           </form>
         )}
       </section>
+
+      {selectedTicker && (
+        <TickerDetail
+          ticker={selectedTicker}
+          entry={selectedEntry}
+          botPosition={selectedBotPosition}
+          onClose={() => setSelectedTicker(null)}
+        />
+      )}
     </main>
   );
 }
