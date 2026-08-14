@@ -22,7 +22,15 @@ import { sendNotificationEmail } from "@/lib/email-notify";
 
 export const dynamic = "force-dynamic"; // never statically cache this route
 
-const TICKER_CAP = 22;
+// Widened from 22: the quality gates in lib/scoring.js (penny stocks, thin
+// liquidity, anomalous moves) exclude some fraction of candidates *after*
+// this pool is assembled, on top of the usual Yahoo-unresolvable losses —
+// without enough raw headroom here, both losses compound and a list can
+// come up short of 9 even when Reddit/Yahoo are both working fine. This
+// does mean more Yahoo requests per cycle (2 per candidate); if you start
+// seeing "ERROR" flashes at the 15s refresh rate, this is the first thing
+// to dial back.
+const TICKER_CAP = 30;
 const TRACKED_RETENTION_MS = 3 * 60 * 1000; // keep a recently-seen candidate in the pool for 3 minutes
 
 function attachTrend(entry, prevBoard, listKey) {

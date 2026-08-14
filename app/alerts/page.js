@@ -4,6 +4,56 @@ import { useEffect, useState } from "react";
 import { timeAgo } from "@/lib/format";
 import { TickerDecal } from "../components/ui";
 
+function ResetButton() {
+  const [armed, setArmed] = useState(false);
+  const [status, setStatus] = useState("idle"); // idle | working | done | error
+
+  async function fire() {
+    setStatus("working");
+    try {
+      const res = await fetch("/api/admin/reset", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Reset failed.");
+      setStatus("done");
+      setArmed(false);
+      setTimeout(() => window.location.reload(), 1200);
+    } catch {
+      setStatus("error");
+    }
+  }
+
+  if (status === "done") {
+    return <div className="text-xs text-[var(--bull)]">Reset complete — alerts cleared, both bots back to a clean $10,000.</div>;
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      {armed ? (
+        <>
+          <button
+            onClick={fire}
+            disabled={status === "working"}
+            className="rounded-sm bg-[var(--bear)] px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-black disabled:opacity-40"
+          >
+            {status === "working" ? "Resetting…" : "Confirm reset"}
+          </button>
+          <button onClick={() => setArmed(false)} className="text-xs text-[var(--ink-dim)] hover:text-[var(--ink)]">
+            Cancel
+          </button>
+        </>
+      ) : (
+        <button
+          onClick={() => setArmed(true)}
+          className="rounded-sm border border-[var(--bear)]/50 px-3 py-1.5 text-xs uppercase tracking-wider text-[var(--bear)] hover:bg-[var(--bear)]/10"
+        >
+          Reset test data
+        </button>
+      )}
+      {status === "error" && <span className="text-xs text-[var(--bear)]">Failed — try again.</span>}
+    </div>
+  );
+}
+
 export default function AlertsPage() {
   const [history, setHistory] = useState(null);
   const [status, setStatus] = useState("loading");
@@ -26,12 +76,19 @@ export default function AlertsPage() {
 
   return (
     <main className="mx-auto max-w-3xl px-3 sm:px-6 py-8 sm:py-12">
-      <header className="mb-8 border-b border-[var(--hairline)] pb-4">
-        <h1 className="font-mono-board text-2xl font-black tracking-tight text-[var(--amber)]">ALERT LOG</h1>
-        <p className="mt-1 text-xs sm:text-sm text-[var(--ink-dim)]">
-          Every Discord alert ever submitted, most recent first — not just the ones still live-scoring on the board.
-        </p>
+      <header className="mb-8 flex flex-wrap items-end justify-between gap-3 border-b border-[var(--hairline)] pb-4">
+        <div>
+          <h1 className="font-mono-board text-2xl font-black tracking-tight text-[var(--amber)]">ALERT LOG</h1>
+          <p className="mt-1 text-xs sm:text-sm text-[var(--ink-dim)]">
+            Every Discord alert ever submitted, most recent first — not just the ones still live-scoring on the board.
+          </p>
+        </div>
+        <ResetButton />
       </header>
+      <p className="-mt-4 mb-8 text-[11px] text-[var(--ink-dim)]">
+        Reset clears every logged alert (live + history) and resets Bot A and Bot B to a clean $10,000 — use this
+        after testing, not mid-session with real trades open.
+      </p>
 
       {status === "loading" && <div className="text-sm text-[var(--ink-dim)] font-mono-board">Loading…</div>}
       {status === "error" && <div className="text-sm text-[var(--bear)] font-mono-board">Failed to load alert history.</div>}

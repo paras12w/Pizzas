@@ -170,7 +170,27 @@ in dev, so you'll see live data locally too.
   `lib/scoring.js` — a ticker failing any of these is excluded from scoring
   entirely (never ranked, never traded), even if it has a Discord alert.
 - **Bot configs (threshold, exit, stop-loss, take-profit, sizing, max hold):**
-  `BOT_CONFIGS` in `lib/bot.js`
+  `BOT_CONFIGS` in `lib/bot.js` — `maxSizePct` is capped at 15% for both
+  bots; position sizing is based on a ticker's `rawConfidence` (its score
+  *before* any Discord-alert floor is applied), so an alert always gets a
+  trade taken but sizes it by how strong the underlying signal actually was,
+  not the floor value.
+- **Alert-rescue sizing floor:** `ALERT_RESCUE_MIN_PCT` in `lib/bot.js`
+  (currently 2%) — the size an alert-driven trade gets when the ticker had
+  essentially no underlying signal on its own.
+- **Options sizing dampener:** `OPTION_SIZE_DAMPENER` in `lib/bot.js`
+  (currently 0.5×) — applied when a Discord alert's `instrument` is
+  detected as an option (leg like `450C`, or words like "calls"/"puts"/
+  "strike") rather than a plain stock mention, since we track P&L against
+  the underlying's price, not the option's actual premium, and options
+  swing far more per dollar than the same size in shares would.
 - **Calibration sensitivity:** `MIN_SAMPLE`, `RECALIBRATION_STEP`, `NUDGE_CAP`
   in `lib/calibration.js`
 - **Refresh interval:** `REFRESH_MS` in `app/page.js` (currently 15s)
+- **Candidate pool size:** `TICKER_CAP` in `app/api/scores/route.js`
+  (currently 30) — raising this gives the quality gates above more raw
+  candidates to filter down from before a list comes up short, at the cost
+  of more Yahoo requests per cycle.
+- **Reset test data:** the "Reset test data" button on `/alerts` clears all
+  logged alerts and resets both bots to a clean $10,000 — useful after
+  testing, not something to hit mid-session with real trades open.
