@@ -63,9 +63,11 @@ login, no manual running required once it's deployed.
      a static pool of always-liquid mega-caps (`ANCHOR_TICKERS`) backfills
      the rest — see the Tuning section below. `SPY`/`QQQ`/`DIA`/`IWM` get
      their own tighter momentum scale (a "big move" for a diversified index
-     is much smaller, in percentage terms, than for a single stock) and
-     always trade as **options** rather than shares when they trade at all
-     — see "Swing options trading" in Tuning.
+     is much smaller, in percentage terms, than for a single stock), an
+     RSI-based **swing entry timing** read (rewards catching a pullback,
+     not chasing an already-overbought move), and always trade as
+     **options** rather than shares when they trade at all — see "Swing
+     options trading" in Tuning.
   7. Runs **two** paper-trading bots (`lib/bot.js`) against those scores,
      each starting from a simulated **$10,000** cash balance, and each
      willing to take both Buy and Sell candidates:
@@ -215,6 +217,17 @@ in dev, so you'll see live data locally too.
   ticker's current move; a tone-neutral headline still counts for partial
   credit. Only looked up for the Reddit/tracked/mover discovery tier, not
   the anchor-ticker fallback, to bound the added Yahoo request volume.
+- **Swing entry timing signal:** the `swingTiming` component in
+  `lib/scoring.js`, fed by `fetchSwingTiming`/`fetchManySwingTiming` in
+  `lib/yahoo.js` — a standard 14-period RSI off daily closes, only checked
+  for whichever `SWING_TICKERS` (SPY/QQQ/DIA/IWM) actually made it into a
+  given cycle's pool (another Yahoo request per ticker, so deliberately not
+  checked for the whole candidate list). Where `structure` answers "is this
+  trending," this answers "is right now a good moment to open a new
+  position in that trend" — it peaks at a moderate, direction-oriented RSI
+  of 35 (pulled back but not capitulating) and tapers off toward either
+  extreme, so chasing an already-overbought move (or shorting an
+  already-oversold one) scores worse than catching a healthy pullback.
 - **Swing options trading:** `SWING_TICKERS` (`SPY`, `QQQ`, `DIA`, `IWM`) in
   `lib/scoring.js` always trade as options rather than plain shares
   whenever they trade at all (given a resolvable options chain) — the whole

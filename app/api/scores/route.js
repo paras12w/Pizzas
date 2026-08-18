@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { discoverTrendingTickers, fetchTickerMentions } from "@/lib/reddit";
-import { fetchManySnapshots, fetchMarketMovers, fetchManyNews } from "@/lib/yahoo";
+import { fetchManySnapshots, fetchMarketMovers, fetchManyNews, fetchManySwingTiming } from "@/lib/yahoo";
 import { scoreTicker, rankTopN, mergeWeights, SWING_TICKERS } from "@/lib/scoring";
 import {
   getAlerts,
@@ -198,13 +198,21 @@ export async function GET() {
     const newsEligible = [...allTickers.slice(0, beforeAnchors), ...swingAnchors];
     const newsByTicker = await fetchManyNews(newsEligible);
 
+    // Swing-entry-timing (RSI) lookups are their own extra Yahoo request
+    // per ticker (a daily-close history call, see fetchSwingTiming in
+    // lib/yahoo.js) — checked only for whichever swing ETFs actually made
+    // it into this cycle's pool, not the full candidate list.
+    const swingTimingByTicker = await fetchManySwingTiming(swingAnchors);
+
     const maxWeightedScore = Math.max(
       ...[...redditEntryByTicker.values()].map((c) => c.weightedScore || 0),
       1
     );
 
     const snapshots = await fetchManySnapshots(allTickers);
-    const snapshotByTicker = new Map(snapshots.map((s) => [s.ticker, s]));
+    const snapshotByTicker = new Map(
+      snapshots.map((s) => [s.ticker, { ...s, ...(swingTimingByTicker.get(s.ticker) || {}) }])
+    );
     const alertByTicker = new Map(alerts.map((a) => [a.ticker, a]));
 
     const scored = allTickers
