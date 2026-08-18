@@ -210,6 +210,13 @@ in dev, so you'll see live data locally too.
   (currently 30) — raising this gives the quality gates above more raw
   candidates to filter down from before a list comes up short, at the cost
   of more Yahoo requests per cycle.
+- **Anchor fallback tickers:** `ANCHOR_TICKERS` in `app/api/scores/route.js`
+  — a static list of always-liquid mega-caps that backfills the pool last,
+  after Reddit/tracked/movers, whenever those sources don't turn up enough
+  candidates on their own (Reddit gets blocked from a lot of cloud IPs;
+  Yahoo's screener endpoint is its own flaky unofficial API) — this is what
+  keeps both boards actually showing 9 and 9 instead of coming up short on
+  a bad discovery cycle.
 - **Reset test data:** the "Reset test data" button on `/alerts` clears all
   logged alerts and resets both bots to a clean $10,000 — useful after
   testing, not something to hit mid-session with real trades open.

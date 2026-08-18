@@ -33,6 +33,25 @@ export const dynamic = "force-dynamic"; // never statically cache this route
 const TICKER_CAP = 30;
 const TRACKED_RETENTION_MS = 3 * 60 * 1000; // keep a recently-seen candidate in the pool for 3 minutes
 
+// Last-resort floor under the whole discovery pipeline: Reddit's public JSON
+// endpoints get blocked outright from a lot of cloud IPs (Vercel's
+// included, see README), and Yahoo's screener endpoint is its own flaky
+// unofficial API that can come back thin or empty on a given cycle. When
+// both underdeliver, there's nothing upstream reorganizing candidates can
+// do — the pool itself is just short of 9-per-direction. These are
+// mega-cap, always-liquid names chosen specifically so they always resolve
+// via a plain Yahoo quote and always clear MIN_TRADABLE_PRICE /
+// MIN_AVG_VOLUME on their own, and span enough names that on any real
+// trading day some are up and some are down — so they backfill whichever
+// direction (or both) actually came up short, not just pad the total count.
+// Added last, after Reddit/tracked/movers have already claimed their slots,
+// so on a day those sources are working fine this contributes nothing.
+const ANCHOR_TICKERS = [
+  "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "NFLX", "AVGO",
+  "JPM", "BAC", "WFC", "XOM", "CVX", "DIS", "KO", "PEP", "WMT", "HD",
+  "UNH", "JNJ", "PG", "V", "MA", "INTC", "CSCO", "ORCL", "CRM", "ADBE",
+];
+
 function attachTrend(entry, prevBoard, listKey) {
   const prevConfidence = prevBoard?.scores?.[entry.ticker];
   const confDelta = prevConfidence != null ? Math.round((entry.confidence - prevConfidence) * 10) / 10 : null;
@@ -125,6 +144,9 @@ export async function GET() {
     const moverBudget = Math.max(0, TICKER_CAP - allTickers.length);
     addUpTo(movers.losers, Math.ceil(moverBudget / 2));
     addUpTo([...movers.actives, ...movers.gainers], Math.max(0, TICKER_CAP - allTickers.length));
+
+    // Anchor pool fills whatever's still short — see ANCHOR_TICKERS above.
+    addUpTo(ANCHOR_TICKERS, Math.max(0, TICKER_CAP - allTickers.length));
 
     const maxWeightedScore = Math.max(
       ...[...redditEntryByTicker.values()].map((c) => c.weightedScore || 0),
