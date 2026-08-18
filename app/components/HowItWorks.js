@@ -25,6 +25,7 @@ function Step({ n, title, children }) {
 // silently drift out of sync with what Bot A actually does.
 export default function HowItWorks({ refreshSeconds }) {
   const a = BOT_CONFIGS.a;
+  const b = BOT_CONFIGS.b;
   const holdHours = Math.round(a.maxHoldMs / 3600000);
 
   return (
@@ -34,8 +35,9 @@ export default function HowItWorks({ refreshSeconds }) {
       </div>
       <div className="space-y-4 px-4 py-4">
         <Step n="1" title="Discovery">
-          Scans Reddit (r/wallstreetbets + friends) for ticker mentions and tone, plus Yahoo&apos;s live movers and
-          analyst ratings, every {refreshSeconds}s.
+          Scans Reddit (r/wallstreetbets + friends) for ticker mentions, tone, and hype, plus Yahoo&apos;s live
+          movers, analyst ratings, multi-day trend structure (price vs. its 50/200-day averages and 52-week range),
+          and the most recent news headline, every {refreshSeconds}s.
         </Step>
         <Step n="2" title="Filters">
           Anything under ${MIN_TRADABLE_PRICE} (penny-stock risk), under {Math.round(MIN_AVG_VOLUME / 1000)}K avg
@@ -59,7 +61,7 @@ export default function HowItWorks({ refreshSeconds }) {
         </Step>
       </div>
       <div className="border-t border-[var(--hairline)] px-4 py-2 text-[10px] text-[var(--ink-dim)]">
-        Bot B runs the same playbook with looser entry (60), a wider stop/target, and bigger sizing —{" "}
+        Bot B runs the same playbook with looser entry ({b.takeThreshold}), a wider stop/target, and bigger sizing —{" "}
         <span className="text-[var(--ink-dim)]">see the Bot B tab.</span>
       </div>
     </section>

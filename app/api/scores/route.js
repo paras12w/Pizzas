@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { discoverTrendingTickers, fetchTickerMentions } from "@/lib/reddit";
-import { fetchManySnapshots, fetchMarketMovers } from "@/lib/yahoo";
-import { scoreTicker, rankTopN, mergeWeights } from "@/lib/scoring";
+import { fetchManySnapshots, fetchMarketMovers, fetchManyNews, fetchManySwingTiming } from "@/lib/yahoo";
+import { scoreTicker, rankTopN, mergeWeights, SWING_TICKERS } from "@/lib/scoring";
 import {
   getAlerts,
   isPersistent,
@@ -32,6 +32,61 @@ export const dynamic = "force-dynamic"; // never statically cache this route
 // to dial back.
 const TICKER_CAP = 30;
 const TRACKED_RETENTION_MS = 3 * 60 * 1000; // keep a recently-seen candidate in the pool for 3 minutes
+
+// Slots reserved exclusively for ANCHOR_TICKERS (see below), carved out of
+// TICKER_CAP rather than added on top of it — total Yahoo requests per
+// cycle stay capped at TICKER_CAP either way. Reddit/tracked/movers are
+// capped to DISCOVERY_CAP *raw tickers fetched*, regardless of how many of
+// those actually survive Yahoo resolution or the quality gates — without
+// this split, a discovery cycle that returns 30 low-quality tickers (thin
+// Reddit chatter, stale tracked entries, an unresolvable symbol) fills the
+// whole pool with candidates that mostly get dropped later, and the anchor
+// backfill below never gets a chance to run at all since "room left" was
+// computed as zero. Reserving the room up front guarantees it survives
+// regardless of how much upstream garbage there is.
+const ANCHOR_RESERVE = 15;
+const DISCOVERY_CAP = TICKER_CAP - ANCHOR_RESERVE;
+
+// Last-resort floor under the whole discovery pipeline: Reddit's public JSON
+// endpoints get blocked outright from a lot of cloud IPs (Vercel's
+// included, see README), and Yahoo's screener endpoint is its own flaky
+// unofficial API that can come back thin or empty on a given cycle. When
+// both underdeliver, there's nothing upstream reorganizing candidates can
+// do — the pool itself is just short of 9-per-direction. These are
+// mega-cap, always-liquid names chosen specifically so they always resolve
+// via a plain Yahoo quote and always clear MIN_TRADABLE_PRICE /
+// MIN_AVG_VOLUME on their own, and span enough names that on any real
+// trading day some are up and some are down — so they backfill whichever
+// direction (or both) actually came up short, not just pad the total count.
+// Added last, after Reddit/tracked/movers have already claimed their slots,
+// so on a day those sources are working fine this contributes nothing.
+// SWING_TICKERS (imported above) are the deepest, most liquid options
+// chains that exist, which is exactly what makes them good swing-options
+// candidates (tight spreads, real IV/skew data, no single-company
+// earnings-gap risk). Placed first in the anchor priority order below so
+// they're the anchor tier's first claim on its reserved slots, and
+// exempted from the "anchors skip news lookups" rule (see newsEligible
+// below) — a fixed, cheap set of 4, not the whole anchor list.
+// Deliberately wider than what ANCHOR_RESERVE actually uses per cycle
+// (see BACKFILL_MAX below) — a pool this size, spanning tech, finance,
+// healthcare, consumer, energy, and industrials, means whichever direction
+// the market favors on a given day, there's still a deep enough bench in
+// the *other* direction for the backfill pass to draw from.
+const ANCHOR_TICKERS = [
+  ...SWING_TICKERS,
+  "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "NFLX", "AVGO",
+  "JPM", "BAC", "WFC", "XOM", "CVX", "DIS", "KO", "PEP", "WMT", "HD",
+  "UNH", "JNJ", "PG", "V", "MA", "INTC", "CSCO", "ORCL", "CRM", "ADBE",
+  "PYPL", "QCOM", "TXN", "IBM", "GE", "CAT", "BA", "MCD", "NKE", "SBUX",
+  "LOW", "TGT", "COST", "ABT", "PFE", "MRK", "LLY", "T", "VZ", "CMCSA",
+  "GS", "MS", "C", "SCHW", "SPGI",
+];
+
+// If either direction still comes up short of 9 after the normal pool is
+// scored, a second targeted pass draws from whatever ANCHOR_TICKERS didn't
+// already make it into the pool — capped since it's an extra, conditional
+// round of Yahoo requests, only spent when there's an actual shortfall.
+const BACKFILL_MAX = 20;
 
 function attachTrend(entry, prevBoard, listKey) {
   const prevConfidence = prevBoard?.scores?.[entry.ticker];
@@ -115,16 +170,39 @@ export async function GET() {
       .filter(([, lastSeenAt]) => now - lastSeenAt < TRACKED_RETENTION_MS)
       .sort((a, b) => b[1] - a[1])
       .map(([ticker]) => ticker);
-    addUpTo(recentlyTracked, Math.max(0, TICKER_CAP - allTickers.length));
+    addUpTo(recentlyTracked, Math.max(0, DISCOVERY_CAP - allTickers.length));
 
     // Yahoo's own live movers fill whatever's left, split explicitly between
     // directions instead of one flat priority list — an earlier version let
     // day_losers claim the whole remaining budget first, which fixed the
     // Sell list but then starved Buy of gainers entirely.
     const movers = await fetchMarketMovers(15);
-    const moverBudget = Math.max(0, TICKER_CAP - allTickers.length);
+    const moverBudget = Math.max(0, DISCOVERY_CAP - allTickers.length);
     addUpTo(movers.losers, Math.ceil(moverBudget / 2));
-    addUpTo([...movers.actives, ...movers.gainers], Math.max(0, TICKER_CAP - allTickers.length));
+    addUpTo([...movers.actives, ...movers.gainers], Math.max(0, DISCOVERY_CAP - allTickers.length));
+
+    // Anchor pool always gets its full reserved room (see ANCHOR_RESERVE
+    // above) — discovery above was capped to DISCOVERY_CAP specifically so
+    // this can't be crowded out by a pool full of low-quality tickers.
+    const beforeAnchors = allTickers.length;
+    addUpTo(ANCHOR_TICKERS, Math.max(0, TICKER_CAP - allTickers.length));
+
+    // News lookups (see fetchTickerNews in lib/yahoo.js) are one extra
+    // Yahoo request per ticker, so only checked for the discovery tier
+    // (Reddit buzz, tracked, movers) — real candidates news-driven "hype"
+    // actually matters for — plus the swing ETFs specifically (see
+    // SWING_TICKERS above), a fixed, cheap set of 4. The rest of the anchor
+    // filler is skipped since it exists purely as a reliability floor and
+    // doesn't need its own catalyst read.
+    const swingAnchors = allTickers.slice(beforeAnchors).filter((t) => SWING_TICKERS.includes(t));
+    const newsEligible = [...allTickers.slice(0, beforeAnchors), ...swingAnchors];
+    const newsByTicker = await fetchManyNews(newsEligible);
+
+    // Swing-entry-timing (RSI) lookups are their own extra Yahoo request
+    // per ticker (a daily-close history call, see fetchSwingTiming in
+    // lib/yahoo.js) — checked only for whichever swing ETFs actually made
+    // it into this cycle's pool, not the full candidate list.
+    const swingTimingByTicker = await fetchManySwingTiming(swingAnchors);
 
     const maxWeightedScore = Math.max(
       ...[...redditEntryByTicker.values()].map((c) => c.weightedScore || 0),
@@ -132,7 +210,9 @@ export async function GET() {
     );
 
     const snapshots = await fetchManySnapshots(allTickers);
-    const snapshotByTicker = new Map(snapshots.map((s) => [s.ticker, s]));
+    const snapshotByTicker = new Map(
+      snapshots.map((s) => [s.ticker, { ...s, ...(swingTimingByTicker.get(s.ticker) || {}) }])
+    );
     const alertByTicker = new Map(alerts.map((a) => [a.ticker, a]));
 
     const scored = allTickers
@@ -142,7 +222,8 @@ export async function GET() {
           snapshotByTicker.get(ticker),
           alertByTicker.get(ticker) || null,
           maxWeightedScore,
-          weights
+          weights,
+          newsByTicker.get(ticker) || null
         )
       )
       // Drop tickers Yahoo couldn't resolve at all — usually not real symbols
@@ -159,8 +240,34 @@ export async function GET() {
     // split by direction so a bearish mover with strong conviction shows up
     // as a good short/put candidate instead of just falling off a single
     // combined list.
-    const buyCandidates = scored.filter((s) => s.direction === "bullish");
-    const sellCandidates = scored.filter((s) => s.direction === "bearish");
+    let buyCandidates = scored.filter((s) => s.direction === "bullish");
+    let sellCandidates = scored.filter((s) => s.direction === "bearish");
+
+    // Direction isn't known until a ticker is actually scored, so the pool
+    // assembled above can't *guarantee* 9-per-direction up front — a broad
+    // market day genuinely can produce far more decliners than advancers
+    // (or vice versa) among the exact tickers this cycle happened to pull
+    // in. Rather than accept whichever split the initial pool landed on,
+    // draw more from the unused rest of ANCHOR_TICKERS and keep only
+    // whichever direction is still short.
+    const usedTickers = new Set(allTickers);
+    async function backfillDirection(direction, list) {
+      if (list.length >= 9) return list;
+      const pool = ANCHOR_TICKERS.filter((t) => !usedTickers.has(t)).slice(0, BACKFILL_MAX);
+      if (!pool.length) return list;
+      pool.forEach((t) => usedTickers.add(t));
+      const extraSnapshots = await fetchManySnapshots(pool);
+      const extraScored = extraSnapshots
+        .map((snap) =>
+          scoreTicker(null, snap, alertByTicker.get(snap.ticker) || null, maxWeightedScore, weights, null)
+        )
+        .filter((s) => s.sources.yahoo && s.tradeable && s.direction === direction);
+      scored.push(...extraScored);
+      return [...list, ...extraScored];
+    }
+    buyCandidates = await backfillDirection("bullish", buyCandidates);
+    sellCandidates = await backfillDirection("bearish", sellCandidates);
+
     const boardBuy = rankTopN(buyCandidates, 9).map((e) => attachTrend(e, prevBoard, "buy"));
     const boardSell = rankTopN(sellCandidates, 9).map((e) => attachTrend(e, prevBoard, "sell"));
 
