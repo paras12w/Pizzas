@@ -33,6 +33,20 @@ export const dynamic = "force-dynamic"; // never statically cache this route
 const TICKER_CAP = 30;
 const TRACKED_RETENTION_MS = 3 * 60 * 1000; // keep a recently-seen candidate in the pool for 3 minutes
 
+// Slots reserved exclusively for ANCHOR_TICKERS (see below), carved out of
+// TICKER_CAP rather than added on top of it — total Yahoo requests per
+// cycle stay capped at TICKER_CAP either way. Reddit/tracked/movers are
+// capped to DISCOVERY_CAP *raw tickers fetched*, regardless of how many of
+// those actually survive Yahoo resolution or the quality gates — without
+// this split, a discovery cycle that returns 30 low-quality tickers (thin
+// Reddit chatter, stale tracked entries, an unresolvable symbol) fills the
+// whole pool with candidates that mostly get dropped later, and the anchor
+// backfill below never gets a chance to run at all since "room left" was
+// computed as zero. Reserving the room up front guarantees it survives
+// regardless of how much upstream garbage there is.
+const ANCHOR_RESERVE = 15;
+const DISCOVERY_CAP = TICKER_CAP - ANCHOR_RESERVE;
+
 // Last-resort floor under the whole discovery pipeline: Reddit's public JSON
 // endpoints get blocked outright from a lot of cloud IPs (Vercel's
 // included, see README), and Yahoo's screener endpoint is its own flaky
@@ -134,18 +148,20 @@ export async function GET() {
       .filter(([, lastSeenAt]) => now - lastSeenAt < TRACKED_RETENTION_MS)
       .sort((a, b) => b[1] - a[1])
       .map(([ticker]) => ticker);
-    addUpTo(recentlyTracked, Math.max(0, TICKER_CAP - allTickers.length));
+    addUpTo(recentlyTracked, Math.max(0, DISCOVERY_CAP - allTickers.length));
 
     // Yahoo's own live movers fill whatever's left, split explicitly between
     // directions instead of one flat priority list — an earlier version let
     // day_losers claim the whole remaining budget first, which fixed the
     // Sell list but then starved Buy of gainers entirely.
     const movers = await fetchMarketMovers(15);
-    const moverBudget = Math.max(0, TICKER_CAP - allTickers.length);
+    const moverBudget = Math.max(0, DISCOVERY_CAP - allTickers.length);
     addUpTo(movers.losers, Math.ceil(moverBudget / 2));
-    addUpTo([...movers.actives, ...movers.gainers], Math.max(0, TICKER_CAP - allTickers.length));
+    addUpTo([...movers.actives, ...movers.gainers], Math.max(0, DISCOVERY_CAP - allTickers.length));
 
-    // Anchor pool fills whatever's still short — see ANCHOR_TICKERS above.
+    // Anchor pool always gets its full reserved room (see ANCHOR_RESERVE
+    // above) — discovery above was capped to DISCOVERY_CAP specifically so
+    // this can't be crowded out by a pool full of low-quality tickers.
     addUpTo(ANCHOR_TICKERS, Math.max(0, TICKER_CAP - allTickers.length));
 
     const maxWeightedScore = Math.max(
