@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { discoverTrendingTickers, fetchTickerMentions } from "@/lib/reddit";
-import { fetchManySnapshots, fetchMarketMovers } from "@/lib/yahoo";
+import { fetchManySnapshots, fetchMarketMovers, fetchManyNews } from "@/lib/yahoo";
 import { scoreTicker, rankTopN, mergeWeights } from "@/lib/scoring";
 import {
   getAlerts,
@@ -162,7 +162,16 @@ export async function GET() {
     // Anchor pool always gets its full reserved room (see ANCHOR_RESERVE
     // above) — discovery above was capped to DISCOVERY_CAP specifically so
     // this can't be crowded out by a pool full of low-quality tickers.
+    const beforeAnchors = allTickers.length;
     addUpTo(ANCHOR_TICKERS, Math.max(0, TICKER_CAP - allTickers.length));
+
+    // News lookups (see fetchTickerNews in lib/yahoo.js) are one extra
+    // Yahoo request per ticker, so only checked for the discovery tier
+    // (Reddit buzz, tracked, movers) — real candidates news-driven "hype"
+    // actually matters for — not the anchor filler, which exists purely as
+    // a reliability floor and doesn't need its own catalyst read.
+    const newsEligible = allTickers.slice(0, beforeAnchors);
+    const newsByTicker = await fetchManyNews(newsEligible);
 
     const maxWeightedScore = Math.max(
       ...[...redditEntryByTicker.values()].map((c) => c.weightedScore || 0),
@@ -180,7 +189,8 @@ export async function GET() {
           snapshotByTicker.get(ticker),
           alertByTicker.get(ticker) || null,
           maxWeightedScore,
-          weights
+          weights,
+          newsByTicker.get(ticker) || null
         )
       )
       // Drop tickers Yahoo couldn't resolve at all — usually not real symbols
