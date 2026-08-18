@@ -41,11 +41,12 @@ login, no manual running required once it's deployed.
      all free on the same Yahoo Finance quote call — for every candidate,
      plus a best-effort read of the nearest options chain for IV / put-call
      skew.
-  4. Checks Yahoo's news search for each Reddit/tracked/mover candidate
-     (skipped for the static anchor-ticker fallback, see below, to bound
-     the extra request volume) and reads the freshness of its most recent
-     headline as a **news catalyst** signal — a fresh headline whose own
-     tone contradicts the ticker's current move counts for nothing, a
+  4. Checks Yahoo's news search for each Reddit/tracked/mover candidate,
+     plus the swing ETFs below regardless of tier (skipped for the rest of
+     the static anchor-ticker fallback, see below, to bound the extra
+     request volume) and reads the freshness of its most recent headline as
+     a **news catalyst** signal — a fresh headline whose own tone
+     contradicts the ticker's current move counts for nothing, a
      tone-neutral one (e.g. an earnings date) still counts for partial
      credit since a real catalyst exists either way.
   5. Folds in any Discord alerts you've logged (see below) — any ticker with
@@ -60,14 +61,18 @@ login, no manual running required once it's deployed.
      Buy (bullish) and Sell (bearish) — each always showing its best 9,
      ranked, even on a slow day. If Reddit/movers can't fill 9 on their own,
      a static pool of always-liquid mega-caps (`ANCHOR_TICKERS`) backfills
-     the rest — see the Tuning section below.
+     the rest — see the Tuning section below. `SPY`/`QQQ`/`DIA`/`IWM` get
+     their own tighter momentum scale (a "big move" for a diversified index
+     is much smaller, in percentage terms, than for a single stock) and
+     always trade as **options** rather than shares when they trade at all
+     — see "Swing options trading" in Tuning.
   7. Runs **two** paper-trading bots (`lib/bot.js`) against those scores,
      each starting from a simulated **$10,000** cash balance, and each
      willing to take both Buy and Sell candidates:
      - **Bot A** (featured, shown on the main board): standard threshold
-       (42), conservative sizing (5%–20% of current bankroll based on
+       (35), conservative sizing (5%–20% of current bankroll based on
        confidence strength), 6h max hold.
-     - **Bot B** (`/bot-b`, kept separate): looser entry threshold (30),
+     - **Bot B** (`/bot-b`, kept separate): looser entry threshold (22),
        more aggressive sizing (3%–30%), tighter 3h leash. It's the "B" side
        of an A/B test — not a claim it's better, that's what Performance is
        for.
@@ -192,7 +197,7 @@ in dev, so you'll see live data locally too.
 - **Discord alert keyword lists:** `lib/discord-parse.js` → `BULLISH_HINTS` / `BEARISH_HINTS`
 - **Scoring weights:** `lib/scoring.js` → `DEFAULT_WEIGHTS` (the live,
   possibly-calibrated weights are visible on `/weights`)
-- **Take threshold:** `TAKE_THRESHOLD` in `lib/scoring.js` (currently 42,
+- **Take threshold:** `TAKE_THRESHOLD` in `lib/scoring.js` (currently 35,
   used for the board's "Taken" badge and Bot A's default)
 - **Alert confidence floor:** `ALERT_MIN_CONFIDENCE` in `lib/scoring.js` (currently 78)
 - **Swing structure signal:** the `structure` component in `lib/scoring.js`
@@ -210,6 +215,18 @@ in dev, so you'll see live data locally too.
   ticker's current move; a tone-neutral headline still counts for partial
   credit. Only looked up for the Reddit/tracked/mover discovery tier, not
   the anchor-ticker fallback, to bound the added Yahoo request volume.
+- **Swing options trading:** `SWING_TICKERS` (`SPY`, `QQQ`, `DIA`, `IWM`) in
+  `lib/scoring.js` always trade as options rather than plain shares
+  whenever they trade at all (given a resolvable options chain) — the whole
+  point of trading a broad index is the leverage, since the index itself
+  moves far too slowly, in percentage terms, for plain shares to be worth
+  holding. Any other ticker needs a setup favorable enough to clear
+  `ORGANIC_OPTION_BENEFIT_THRESHOLD` (currently 55, checked against
+  `benefit`) before it trades as an option instead of shares. Either way,
+  P&L is tracked against the underlying's price move, not an actual option
+  contract's premium, dampened by `OPTION_SIZE_DAMPENER` in `lib/bot.js` to
+  compensate for options swinging harder per dollar than the same size in
+  shares would — see that file for the caveats.
 - **Quality gates (penny stocks, thin liquidity, anomalous moves):**
   `MIN_TRADABLE_PRICE`, `MIN_AVG_VOLUME`, `EXTREME_MOVE_PCT` in
   `lib/scoring.js` — a ticker failing any of these is excluded from scoring

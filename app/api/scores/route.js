@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { discoverTrendingTickers, fetchTickerMentions } from "@/lib/reddit";
 import { fetchManySnapshots, fetchMarketMovers, fetchManyNews } from "@/lib/yahoo";
-import { scoreTicker, rankTopN, mergeWeights } from "@/lib/scoring";
+import { scoreTicker, rankTopN, mergeWeights, SWING_TICKERS } from "@/lib/scoring";
 import {
   getAlerts,
   isPersistent,
@@ -60,7 +60,15 @@ const DISCOVERY_CAP = TICKER_CAP - ANCHOR_RESERVE;
 // direction (or both) actually came up short, not just pad the total count.
 // Added last, after Reddit/tracked/movers have already claimed their slots,
 // so on a day those sources are working fine this contributes nothing.
+// SWING_TICKERS (imported above) are the deepest, most liquid options
+// chains that exist, which is exactly what makes them good swing-options
+// candidates (tight spreads, real IV/skew data, no single-company
+// earnings-gap risk). Placed first in the anchor priority order below so
+// they're the anchor tier's first claim on its reserved slots, and
+// exempted from the "anchors skip news lookups" rule (see newsEligible
+// below) — a fixed, cheap set of 4, not the whole anchor list.
 const ANCHOR_TICKERS = [
+  ...SWING_TICKERS,
   "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "NFLX", "AVGO",
   "JPM", "BAC", "WFC", "XOM", "CVX", "DIS", "KO", "PEP", "WMT", "HD",
   "UNH", "JNJ", "PG", "V", "MA", "INTC", "CSCO", "ORCL", "CRM", "ADBE",
@@ -168,9 +176,12 @@ export async function GET() {
     // News lookups (see fetchTickerNews in lib/yahoo.js) are one extra
     // Yahoo request per ticker, so only checked for the discovery tier
     // (Reddit buzz, tracked, movers) — real candidates news-driven "hype"
-    // actually matters for — not the anchor filler, which exists purely as
-    // a reliability floor and doesn't need its own catalyst read.
-    const newsEligible = allTickers.slice(0, beforeAnchors);
+    // actually matters for — plus the swing ETFs specifically (see
+    // SWING_TICKERS above), a fixed, cheap set of 4. The rest of the anchor
+    // filler is skipped since it exists purely as a reliability floor and
+    // doesn't need its own catalyst read.
+    const swingAnchors = allTickers.slice(beforeAnchors).filter((t) => SWING_TICKERS.includes(t));
+    const newsEligible = [...allTickers.slice(0, beforeAnchors), ...swingAnchors];
     const newsByTicker = await fetchManyNews(newsEligible);
 
     const maxWeightedScore = Math.max(
