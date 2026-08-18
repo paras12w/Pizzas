@@ -67,12 +67,26 @@ const DISCOVERY_CAP = TICKER_CAP - ANCHOR_RESERVE;
 // they're the anchor tier's first claim on its reserved slots, and
 // exempted from the "anchors skip news lookups" rule (see newsEligible
 // below) — a fixed, cheap set of 4, not the whole anchor list.
+// Deliberately wider than what ANCHOR_RESERVE actually uses per cycle
+// (see BACKFILL_MAX below) — a pool this size, spanning tech, finance,
+// healthcare, consumer, energy, and industrials, means whichever direction
+// the market favors on a given day, there's still a deep enough bench in
+// the *other* direction for the backfill pass to draw from.
 const ANCHOR_TICKERS = [
   ...SWING_TICKERS,
   "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "NFLX", "AVGO",
   "JPM", "BAC", "WFC", "XOM", "CVX", "DIS", "KO", "PEP", "WMT", "HD",
   "UNH", "JNJ", "PG", "V", "MA", "INTC", "CSCO", "ORCL", "CRM", "ADBE",
+  "PYPL", "QCOM", "TXN", "IBM", "GE", "CAT", "BA", "MCD", "NKE", "SBUX",
+  "LOW", "TGT", "COST", "ABT", "PFE", "MRK", "LLY", "T", "VZ", "CMCSA",
+  "GS", "MS", "C", "SCHW", "SPGI",
 ];
+
+// If either direction still comes up short of 9 after the normal pool is
+// scored, a second targeted pass draws from whatever ANCHOR_TICKERS didn't
+// already make it into the pool — capped since it's an extra, conditional
+// round of Yahoo requests, only spent when there's an actual shortfall.
+const BACKFILL_MAX = 20;
 
 function attachTrend(entry, prevBoard, listKey) {
   const prevConfidence = prevBoard?.scores?.[entry.ticker];
@@ -218,8 +232,34 @@ export async function GET() {
     // split by direction so a bearish mover with strong conviction shows up
     // as a good short/put candidate instead of just falling off a single
     // combined list.
-    const buyCandidates = scored.filter((s) => s.direction === "bullish");
-    const sellCandidates = scored.filter((s) => s.direction === "bearish");
+    let buyCandidates = scored.filter((s) => s.direction === "bullish");
+    let sellCandidates = scored.filter((s) => s.direction === "bearish");
+
+    // Direction isn't known until a ticker is actually scored, so the pool
+    // assembled above can't *guarantee* 9-per-direction up front — a broad
+    // market day genuinely can produce far more decliners than advancers
+    // (or vice versa) among the exact tickers this cycle happened to pull
+    // in. Rather than accept whichever split the initial pool landed on,
+    // draw more from the unused rest of ANCHOR_TICKERS and keep only
+    // whichever direction is still short.
+    const usedTickers = new Set(allTickers);
+    async function backfillDirection(direction, list) {
+      if (list.length >= 9) return list;
+      const pool = ANCHOR_TICKERS.filter((t) => !usedTickers.has(t)).slice(0, BACKFILL_MAX);
+      if (!pool.length) return list;
+      pool.forEach((t) => usedTickers.add(t));
+      const extraSnapshots = await fetchManySnapshots(pool);
+      const extraScored = extraSnapshots
+        .map((snap) =>
+          scoreTicker(null, snap, alertByTicker.get(snap.ticker) || null, maxWeightedScore, weights, null)
+        )
+        .filter((s) => s.sources.yahoo && s.tradeable && s.direction === direction);
+      scored.push(...extraScored);
+      return [...list, ...extraScored];
+    }
+    buyCandidates = await backfillDirection("bullish", buyCandidates);
+    sellCandidates = await backfillDirection("bearish", sellCandidates);
+
     const boardBuy = rankTopN(buyCandidates, 9).map((e) => attachTrend(e, prevBoard, "buy"));
     const boardSell = rankTopN(sellCandidates, 9).map((e) => attachTrend(e, prevBoard, "sell"));
 

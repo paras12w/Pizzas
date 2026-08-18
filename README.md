@@ -220,13 +220,24 @@ in dev, so you'll see live data locally too.
   whenever they trade at all (given a resolvable options chain) — the whole
   point of trading a broad index is the leverage, since the index itself
   moves far too slowly, in percentage terms, for plain shares to be worth
-  holding. Any other ticker needs a setup favorable enough to clear
-  `ORGANIC_OPTION_BENEFIT_THRESHOLD` (currently 55, checked against
+  holding. Any other *bullish* ticker needs a setup favorable enough to
+  clear `ORGANIC_OPTION_BENEFIT_THRESHOLD` (currently 55, checked against
   `benefit`) before it trades as an option instead of shares. Either way,
   P&L is tracked against the underlying's price move, not an actual option
   contract's premium, dampened by `OPTION_SIZE_DAMPENER` in `lib/bot.js` to
   compensate for options swinging harder per dollar than the same size in
   shares would — see that file for the caveats.
+- **No short-selling, ever:** every *bearish* trade is a put, full stop —
+  never a plain short position, since a short sale isn't something this is
+  meant to model as executable. This is a hard rule in `scoreTicker` (`lib/
+  scoring.js`) with no override: not by `ORGANIC_OPTION_BENEFIT_THRESHOLD`
+  (irrelevant for bearish — there's no "cheaper shares" alternative to
+  weigh against), and not by a Discord alert that logged an explicit
+  `instrument: "stock"` for a sell signal. A bearish ticker with no
+  resolvable options chain has no way to be taken at all — puts are the
+  only bearish instrument available — so it's marked untradeable (same
+  quality-gate pattern as penny stocks / thin liquidity) rather than
+  silently falling back to a short.
 - **Quality gates (penny stocks, thin liquidity, anomalous moves):**
   `MIN_TRADABLE_PRICE`, `MIN_AVG_VOLUME`, `EXTREME_MOVE_PCT` in
   `lib/scoring.js` — a ticker failing any of these is excluded from scoring
@@ -263,6 +274,16 @@ in dev, so you'll see live data locally too.
   endpoint is its own flaky unofficial API) — this is what keeps both
   boards actually showing 9 and 9 instead of coming up short on
   a bad discovery cycle.
+- **Direction-shortfall backfill:** `backfillDirection` / `BACKFILL_MAX` in
+  `app/api/scores/route.js` — direction (bullish/bearish) isn't known until
+  a ticker is actually scored, so the initial pool can land unevenly split
+  even when it's a full 30 candidates (a broad market day can genuinely
+  have far more decliners than advancers among the exact tickers that
+  cycle happened to pull in). If either board is still short of 9 after
+  the initial pass, this draws more from whatever's left in
+  `ANCHOR_TICKERS` (capped at `BACKFILL_MAX` extra Yahoo requests) and
+  keeps only the ones matching the deficient direction — a second,
+  conditional round, not something that runs every cycle.
 - **Reset test data:** the "Reset test data" button on `/alerts` clears all
   logged alerts and resets both bots to a clean $10,000 — useful after
   testing, not something to hit mid-session with real trades open.
