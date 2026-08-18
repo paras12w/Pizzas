@@ -1,0 +1,26 @@
+name: Keep bots trading
+
+# The board only recomputes scores and advances bot positions when
+# /api/scores is actually hit — with just client polling, that only happens
+# while someone has the page open (see README's "standalone" note). This
+# pings the live deployment on a schedule so both paper-trading bots keep
+# opening/closing positions against real prices even with zero visitors, so
+# trades started while nobody was watching are already fully played out
+# (or still progressing) the next time the board is opened.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    env:
+      # Override by setting a repo variable named SITE_URL (Settings ->
+      # Secrets and variables -> Actions -> Variables) if the deployment
+      # domain ever changes, e.g. after moving off a preview URL onto a
+      # stable production alias or custom domain.
+      SITE_URL: ${{ vars.SITE_URL || 'https://pizzas-36qsnp0cv-paras12ws-projects.vercel.app' }}
+    steps:
+      - name: Hit /api/scores
+        run: curl -sS --max-time 25 -o /dev/null -w "status=%{http_code}\n" "$SITE_URL/api/scores"

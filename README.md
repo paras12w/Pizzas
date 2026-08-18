@@ -54,9 +54,9 @@ login, no manual running required once it's deployed.
      each starting from a simulated **$10,000** cash balance, and each
      willing to take both Buy and Sell candidates:
      - **Bot A** (featured, shown on the main board): standard threshold
-       (72), conservative sizing (5%–20% of current bankroll based on
+       (55), conservative sizing (5%–20% of current bankroll based on
        confidence strength), 6h max hold.
-     - **Bot B** (`/bot-b`, kept separate): looser entry threshold (60),
+     - **Bot B** (`/bot-b`, kept separate): looser entry threshold (42),
        more aggressive sizing (3%–30%), tighter 3h leash. It's the "B" side
        of an A/B test — not a claim it's better, that's what Performance is
        for.
@@ -80,12 +80,19 @@ login, no manual running required once it's deployed.
 
 **Important nuance on "standalone":** the scoring only runs when
 `/api/scores` is hit. With just client polling, that means it only
-recomputes while someone has the page open. That's normal and fine for a
-public dashboard. If you want it to keep updating even with zero visitors
-(e.g. so the bots keep managing open positions unattended), you'd add a
-scheduled job — Vercel's free Hobby plan caps its built-in Cron to once a
-day; for anything more frequent you'd either upgrade to Vercel Pro or use a
-free external pinger (e.g. cron-job.org) hitting `/api/scores`.
+recomputes while someone has the page open. To let the bots keep opening
+and closing positions unattended (so a trade started while nobody's
+watching has actually played out by the time you check back), this repo
+ships `.github/workflows/keep-bots-trading.yml` — a free GitHub Actions
+job that pings `/api/scores` every 10 minutes. It defaults to the deployed
+URL baked into the workflow; if that domain ever changes (e.g. moving off
+a preview URL onto a stable alias or custom domain), set a repo variable
+named `SITE_URL` (Settings → Secrets and variables → Actions → Variables)
+to override it — no file edit needed. Note this only runs while the
+workflow is enabled on GitHub (public repos get unlimited free Actions
+minutes; private repos get a monthly quota) — Vercel's free Hobby plan
+still caps its own built-in Cron to once a day, which is why this pings
+from GitHub instead.
 
 **On polling speed:** 15s is fast enough that each candidate's 2 Yahoo
 requests (quote + options) add up quickly — the candidate pool is
@@ -122,7 +129,8 @@ below) — both are optional and independent of each other.
 1. Push this folder to a new GitHub repo.
 2. Import it into Vercel (vercel.com → New Project → your repo). No env
    vars are required for the site to work.
-3. **(Recommended)** For alerts, bot positions, watchlist, notification
+3. **(Recommended — effectively required if you enable the keep-alive
+   workflow in step 6)** For alerts, bot positions, watchlist, notification
    settings, and calibrated weights to persist across requests instead of
    resetting on cold starts: in your Vercel project → **Storage** tab →
    **Browse Storage**. The standalone "KV" product is retired, so instead
@@ -144,6 +152,17 @@ below) — both are optional and independent of each other.
    tier), create an API key, and set `RESEND_API_KEY` in your Vercel
    project's env vars. Until this is set, the notification toggle still
    saves your preference but nothing actually sends.
+6. **(Recommended, requires step 3's persistent storage to actually work)**
+   For the bots to keep opening/closing trades in the background even with
+   nobody on the page: this repo already includes
+   `.github/workflows/keep-bots-trading.yml`, which pings `/api/scores`
+   every 10 minutes via GitHub Actions — nothing to install, it runs as
+   soon as the workflow file is on GitHub's default branch (check the
+   **Actions** tab to confirm it's enabled; GitHub disables new workflows
+   on forks/imports by default until you click "I understand my workflows,
+   go ahead and enable them"). Without step 3's Redis storage, each ping
+   likely lands on a fresh serverless instance with reset in-memory state,
+   so positions won't actually accumulate between pings.
 
 ## Local development
 
@@ -162,7 +181,7 @@ in dev, so you'll see live data locally too.
 - **Discord alert keyword lists:** `lib/discord-parse.js` → `BULLISH_HINTS` / `BEARISH_HINTS`
 - **Scoring weights:** `lib/scoring.js` → `DEFAULT_WEIGHTS` (the live,
   possibly-calibrated weights are visible on `/weights`)
-- **Take threshold:** `TAKE_THRESHOLD` in `lib/scoring.js` (currently 72,
+- **Take threshold:** `TAKE_THRESHOLD` in `lib/scoring.js` (currently 55,
   used for the board's "Taken" badge and Bot A's default)
 - **Alert confidence floor:** `ALERT_MIN_CONFIDENCE` in `lib/scoring.js` (currently 78)
 - **Quality gates (penny stocks, thin liquidity, anomalous moves):**
