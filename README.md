@@ -228,6 +228,16 @@ in dev, so you'll see live data locally too.
   of 35 (pulled back but not capitulating) and tapers off toward either
   extreme, so chasing an already-overbought move (or shorting an
   already-oversold one) scores worse than catching a healthy pullback.
+- **Earnings catalyst signal:** the `earningsCatalyst` component in
+  `lib/scoring.js` — benefit-only (a nearby earnings date says nothing
+  about which direction a move goes, only that a bigger one is plausible),
+  fed by `earningsAt` on the snapshot (`lib/yahoo.js`), free on the same
+  Yahoo quote call every candidate already gets, so unlike the other
+  signals above it's checked for the *whole* pool, anchors included. Peaks
+  right at the earnings date and tapers off over roughly two weeks either
+  side, wide enough to absorb Yahoo's own documented ~2-day inaccuracy on
+  this field; not gated to "upcoming only," since a report from a day or
+  two ago is still live catalyst territory (post-earnings drift).
 - **Swing options trading:** `SWING_TICKERS` (`SPY`, `QQQ`, `DIA`, `IWM`) in
   `lib/scoring.js` always trade as options rather than plain shares
   whenever they trade at all (given a resolvable options chain) — the whole
